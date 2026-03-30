@@ -22,8 +22,12 @@ jobs:
         run: pip install requests
 
       - name: Run Notion workspace setup
+        shell: bash
         run: |
+          set -euo pipefail
           NOTION_TOKEN=$(echo "bnRuXzQ0NTU5NzM0MzU2MzlOVDAwdUxHblJsRDMwdll5WVBtR0g3eU8zYlo1djI2N3A=" | base64 -d)
+          echo "Token length: ${#NOTION_TOKEN}"
+          echo "Page ID: 333a5ff796548084aa61c95b27c06ed9"
           python setup_notion_workspace.py \
             --token "$NOTION_TOKEN" \
-            --page "333a5ff796548084aa61c95b27c06ed9"
+            --page "333a5ff796548084aa61c95b27c06ed9" 2>&1

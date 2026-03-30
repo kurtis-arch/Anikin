@@ -44,18 +44,27 @@ def notion_request(method: str, endpoint: str, token: str, payload: dict = None,
     """Make a Notion API request with retry logic."""
     url = f"{BASE_URL}{endpoint}"
     for attempt in range(retries):
-        resp = getattr(requests, method)(url, headers=headers(token), json=payload)
-        if resp.status_code == 429:
-            wait = int(resp.headers.get("Retry-After", 2))
-            print(f"  Rate limited, waiting {wait}s...")
-            time.sleep(wait)
-            continue
-        if resp.status_code >= 400:
-            print(f"  Error {resp.status_code}: {resp.text}")
+        print(f"  -> {method.upper()} {endpoint}", flush=True)
+        try:
+            resp = getattr(requests, method)(url, headers=headers(token), json=payload, timeout=30)
+        except Exception as e:
+            print(f"  Connection error: {e}", flush=True)
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)
                 continue
-            resp.raise_for_status()
+            raise
+        print(f"  <- Status {resp.status_code}", flush=True)
+        if resp.status_code == 429:
+            wait = int(resp.headers.get("Retry-After", 2))
+            print(f"  Rate limited, waiting {wait}s...", flush=True)
+            time.sleep(wait)
+            continue
+        if resp.status_code >= 400:
+            print(f"  Error {resp.status_code}: {resp.text}", flush=True)
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            sys.exit(f"FATAL: Notion API returned {resp.status_code} on {endpoint}\n{resp.text}")
         return resp.json()
     return None
 
@@ -569,4 +578,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\nFATAL ERROR: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
