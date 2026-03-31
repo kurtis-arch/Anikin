@@ -17,7 +17,7 @@ Usage:
 """
 
 import argparse
-import json
+import re
 import sys
 import time
 
@@ -30,52 +30,53 @@ BASE_URL = "https://services.leadconnectorhq.com"
 FIELD_NAME = "Abandoned Reason"
 FIELD_OBJECT = "opportunity"
 FIELD_DATATYPE = "SINGLE_OPTIONS"
+FOLDER_NAME = "Case Details"
 
-# Add more options here as needed — each dict has "name" and "value".
+# Each option: "name" is the display label, "value" is the internal key.
 FIELD_OPTIONS = [
     {
         "name": "Person is still alive (estate planning / POA / guardianship / conservatorship)",
-        "value": "Person is still alive (estate planning / POA / guardianship / conservatorship)",
+        "value": "person_is_still_alive",
     },
     {
         "name": "Decedent resided out of state (firm not licensed in that jurisdiction)",
-        "value": "Decedent resided out of state (firm not licensed in that jurisdiction)",
+        "value": "decedent_resided_out_of_state",
     },
     {
         "name": "Only assets are a vehicle and/or personal property (no real estate, no financial accounts)",
-        "value": "Only assets are a vehicle and/or personal property (no real estate, no financial accounts)",
+        "value": "only_assets_vehicle_or_personal_property",
     },
     {
         "name": "Caller wants one specific item only (car keys, gun, personal belonging)",
-        "value": "Caller wants one specific item only (car keys, gun, personal belonging)",
+        "value": "caller_wants_one_specific_item",
     },
     {
         "name": "Family — no legal standing",
-        "value": "Family — no legal standing",
+        "value": "family_no_legal_standing",
     },
     {
         "name": "Non-family — no legal standing",
-        "value": "Non-family — no legal standing",
+        "value": "non_family_no_legal_standing",
     },
     {
         "name": "Services requested not offered by the firm (civil case, non-probate matter)",
-        "value": "Services requested not offered by the firm (civil case, non-probate matter)",
+        "value": "services_not_offered_by_firm",
     },
     {
         "name": "Language barrier — unable to qualify",
-        "value": "Language barrier — unable to qualify",
+        "value": "language_barrier",
     },
     {
         "name": "Contested case — client expected win/settlement below $100K, doesn't justify $12K retainer",
-        "value": "Contested case — client expected win/settlement below $100K, doesn't justify $12K retainer",
+        "value": "contested_case_below_100k",
     },
     {
         "name": "Court deadline too soon (within 14 days, can't onboard in time)",
-        "value": "Court deadline too soon (within 14 days, can't onboard in time)",
+        "value": "court_deadline_too_soon",
     },
     {
         "name": "Caller has limited/no info about assets but is an interested party",
-        "value": "Caller has limited/no info about assets but is an interested party",
+        "value": "caller_limited_no_info_about_assets",
     },
 ]
 
@@ -110,43 +111,52 @@ def fetch_locations(api_key: str) -> list[dict]:
         if len(batch) < limit:
             break
         skip += limit
-        time.sleep(0.3)  # rate-limit courtesy
+        time.sleep(0.3)
 
     return locations
 
 
-def ensure_custom_field_group(api_key: str, location_id: str, group_name: str = "Case Details") -> str | None:
+def get_or_create_folder(api_key: str, location_id: str, folder_name: str = FOLDER_NAME) -> str:
     """
-    Look up (or create) a custom field group named `group_name` under the
-    opportunity object for the given location. Returns the group ID.
+    Find an existing custom field folder by name, or create one.
+    Returns the folder ID.
     """
     headers = get_headers(api_key)
 
-    # First check if the group already exists
+    # 1. List existing custom fields and look for a folder with the right name
     url = f"{BASE_URL}/locations/{location_id}/customFields"
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
     data = resp.json()
 
-    # Check existing custom fields for the group
-    custom_fields = data.get("customFields", [])
-    for cf in custom_fields:
-        if cf.get("fieldKey", "").startswith("opportunity.") or cf.get("model") == "opportunity":
+    for cf in data.get("customFields", []):
+        if cf.get("model") == "opportunity":
             group = cf.get("group", {})
-            if isinstance(group, dict) and group.get("name") == group_name:
-                return group.get("id")
+            if isinstance(group, dict) and group.get("name") == folder_name:
+                return group["id"]
 
-    # If not found, we'll pass the group name when creating the field.
-    # The HighLevel API can auto-create the group when specified by name.
-    return None
+    # 2. Not found — create it
+    folder_url = f"{BASE_URL}/locations/{location_id}/customFields/folder"
+    payload = {
+        "name": folder_name,
+        "model": FIELD_OBJECT,
+    }
+    resp = requests.post(folder_url, headers=headers, json=payload)
+    resp.raise_for_status()
+    result = resp.json()
+    folder_id = result.get("folder", {}).get("id") or result.get("id")
+    if not folder_id:
+        raise RuntimeError(f"Failed to create folder '{folder_name}': {result}")
+    return folder_id
 
 
 def create_custom_field_for_location(api_key: str, location_id: str, location_name: str = "") -> dict:
     """
     Create the Abandoned Reason custom field on a single location.
-    Uses the HighLevel Custom Fields API v2.
+    First ensures the "Case Details" folder exists, then creates the field in it.
     """
     headers = get_headers(api_key)
+    label = f"[{location_name or location_id}]"
     url = f"{BASE_URL}/locations/{location_id}/customFields"
 
     # Check if field already exists to avoid duplicates
@@ -156,16 +166,19 @@ def create_custom_field_for_location(api_key: str, location_id: str, location_na
 
     for cf in existing:
         if cf.get("name") == FIELD_NAME and cf.get("dataType") == FIELD_DATATYPE:
-            label = f"[{location_name or location_id}]"
             print(f"  ⏭  {label} — '{FIELD_NAME}' already exists (id: {cf['id']}), skipping.")
             return {"status": "exists", "location_id": location_id, "field_id": cf["id"]}
 
-    # Build the payload
+    # Ensure "Case Details" folder exists and get its ID
+    folder_id = get_or_create_folder(api_key, location_id)
+    print(f"  📁 {label} — Using folder '{FOLDER_NAME}' (id: {folder_id})")
+
+    # Build the payload with the folder ID
     payload = {
         "name": FIELD_NAME,
         "dataType": FIELD_DATATYPE,
         "model": FIELD_OBJECT,
-        "group": "Case Details",
+        "group": folder_id,
         "placeholder": "Select abandoned reason",
         "options": FIELD_OPTIONS,
     }
@@ -174,7 +187,6 @@ def create_custom_field_for_location(api_key: str, location_id: str, location_na
     resp.raise_for_status()
     result = resp.json()
     field_id = result.get("customField", {}).get("id", "unknown")
-    label = f"[{location_name or location_id}]"
     print(f"  ✅ {label} — Created '{FIELD_NAME}' (id: {field_id})")
     return {"status": "created", "location_id": location_id, "field_id": field_id}
 
