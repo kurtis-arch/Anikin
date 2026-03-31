@@ -36,47 +36,47 @@ FOLDER_NAME = "Case Details"
 FIELD_OPTIONS = [
     {
         "name": "Person is still alive (estate planning / POA / guardianship / conservatorship)",
-        "value": "person_is_still_alive",
+        "value": "Person is still alive (estate planning / POA / guardianship / conservatorship)",
     },
     {
         "name": "Decedent resided out of state (firm not licensed in that jurisdiction)",
-        "value": "decedent_resided_out_of_state",
+        "value": "Decedent resided out of state (firm not licensed in that jurisdiction)",
     },
     {
         "name": "Only assets are a vehicle and/or personal property (no real estate, no financial accounts)",
-        "value": "only_assets_vehicle_or_personal_property",
+        "value": "Only assets are a vehicle and/or personal property (no real estate, no financial accounts)",
     },
     {
         "name": "Caller wants one specific item only (car keys, gun, personal belonging)",
-        "value": "caller_wants_one_specific_item",
+        "value": "Caller wants one specific item only (car keys, gun, personal belonging)",
     },
     {
         "name": "Family — no legal standing",
-        "value": "family_no_legal_standing",
+        "value": "Family — no legal standing",
     },
     {
         "name": "Non-family — no legal standing",
-        "value": "non_family_no_legal_standing",
+        "value": "Non-family — no legal standing",
     },
     {
         "name": "Services requested not offered by the firm (civil case, non-probate matter)",
-        "value": "services_not_offered_by_firm",
+        "value": "Services requested not offered by the firm (civil case, non-probate matter)",
     },
     {
         "name": "Language barrier — unable to qualify",
-        "value": "language_barrier",
+        "value": "Language barrier — unable to qualify",
     },
     {
         "name": "Contested case — client expected win/settlement below $100K, doesn't justify $12K retainer",
-        "value": "contested_case_below_100k",
+        "value": "Contested case — client expected win/settlement below $100K, doesn't justify $12K retainer",
     },
     {
         "name": "Court deadline too soon (within 14 days, can't onboard in time)",
-        "value": "court_deadline_too_soon",
+        "value": "Court deadline too soon (within 14 days, can't onboard in time)",
     },
     {
         "name": "Caller has limited/no info about assets but is an interested party",
-        "value": "caller_limited_no_info_about_assets",
+        "value": "Caller has limited/no info about assets but is an interested party",
     },
 ]
 
