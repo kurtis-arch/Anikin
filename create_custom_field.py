@@ -37,6 +37,46 @@ FIELD_OPTIONS = [
         "name": "Person is still alive (estate planning / POA / guardianship / conservatorship)",
         "value": "Person is still alive (estate planning / POA / guardianship / conservatorship)",
     },
+    {
+        "name": "Decedent resided out of state (firm not licensed in that jurisdiction)",
+        "value": "Decedent resided out of state (firm not licensed in that jurisdiction)",
+    },
+    {
+        "name": "Only assets are a vehicle and/or personal property (no real estate, no financial accounts)",
+        "value": "Only assets are a vehicle and/or personal property (no real estate, no financial accounts)",
+    },
+    {
+        "name": "Caller wants one specific item only (car keys, gun, personal belonging)",
+        "value": "Caller wants one specific item only (car keys, gun, personal belonging)",
+    },
+    {
+        "name": "Family — no legal standing",
+        "value": "Family — no legal standing",
+    },
+    {
+        "name": "Non-family — no legal standing",
+        "value": "Non-family — no legal standing",
+    },
+    {
+        "name": "Services requested not offered by the firm (civil case, non-probate matter)",
+        "value": "Services requested not offered by the firm (civil case, non-probate matter)",
+    },
+    {
+        "name": "Language barrier — unable to qualify",
+        "value": "Language barrier — unable to qualify",
+    },
+    {
+        "name": "Contested case — client expected win/settlement below $100K, doesn't justify $12K retainer",
+        "value": "Contested case — client expected win/settlement below $100K, doesn't justify $12K retainer",
+    },
+    {
+        "name": "Court deadline too soon (within 14 days, can't onboard in time)",
+        "value": "Court deadline too soon (within 14 days, can't onboard in time)",
+    },
+    {
+        "name": "Caller has limited/no info about assets but is an interested party",
+        "value": "Caller has limited/no info about assets but is an interested party",
+    },
 ]
 
 # ── API Helpers ──────────────────────────────────────────────────────────────
