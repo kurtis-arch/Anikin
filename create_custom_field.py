@@ -165,6 +165,7 @@ def create_custom_field_for_location(api_key: str, location_id: str, location_na
         "name": FIELD_NAME,
         "dataType": FIELD_DATATYPE,
         "model": FIELD_OBJECT,
+        "group": "Case Details",
         "placeholder": "Select abandoned reason",
         "options": FIELD_OPTIONS,
     }
