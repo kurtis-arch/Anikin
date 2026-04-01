@@ -2,7 +2,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # === CONFIGURATION ===
-SPREADSHEET_NAME = "Your Spreadsheet Name"  # Update with your spreadsheet name
+SPREADSHEET_NAME = "Smith Barid-Response Centers Statement"
 SHEET_INDEX = 0  # First sheet (tab index)
 CREDENTIALS_FILE = "credentials.json"  # Path to your Google service account JSON key
 
