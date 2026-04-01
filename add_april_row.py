@@ -6,9 +6,11 @@ SPREADSHEET_NAME = "Your Spreadsheet Name"  # Update with your spreadsheet name
 SHEET_INDEX = 0  # First sheet (tab index)
 CREDENTIALS_FILE = "credentials.json"  # Path to your Google service account JSON key
 
-OUTBOUND_APRIL_ROW = 38  # Insert after March (row 37) in Outbound Calls
-INBOUND_APRIL_ROW = 52   # Insert after last entry (row 51) in Inbound Calls Purchased
-                          # Note: becomes row 53 after the outbound row insert shifts everything down
+# Original row positions (before any inserts)
+OUTBOUND_CALLS_ROW = 38       # After March (row 37)
+INBOUND_PURCHASED_ROW = 58    # After 26/03/2026 (row 57)
+OUTBOUND_PURCHASED_ROW = 73   # After 26/03/2026 (row 72)
+AVG_MONTHLY_COSTS_ROW = 93    # After February (row 92)
 
 # === AUTH & CONNECT ===
 scopes = [
@@ -21,21 +23,46 @@ client = gspread.authorize(creds)
 spreadsheet = client.open(SPREADSHEET_NAME)
 sheet = spreadsheet.get_worksheet(SHEET_INDEX)
 
-# === 1. INSERT APRIL ROW IN OUTBOUND CALLS ===
-sheet.insert_row(
-    ["April", "", "$1.50", "=B38*C38"],
-    index=OUTBOUND_APRIL_ROW,
-    value_input_option="USER_ENTERED",
-)
-print(f"Outbound Calls: April row inserted at row {OUTBOUND_APRIL_ROW} with formula =B38*C38")
+# Each insert shifts all rows below by 1, so we track the offset
+offset = 0
 
-# === 2. INSERT APRIL ROW IN INBOUND CALLS PURCHASED ===
-# After the outbound insert, everything below shifts down by 1
-inbound_row = INBOUND_APRIL_ROW + 1  # 52 -> 53
+# === 1. OUTBOUND CALLS — row 38 ===
+row = OUTBOUND_CALLS_ROW + offset
 sheet.insert_row(
-    ["01/04/2026", "", "", "=B53*C53"],
-    index=inbound_row,
+    ["April", "", "$1.50", f"=B{row}*C{row}"],
+    index=row,
     value_input_option="USER_ENTERED",
 )
-print(f"Inbound Calls: April row inserted at row {inbound_row} with formula =B53*C53")
-print("\nFill in the blank cells (minutes, inbound calls, price) and totals will auto-calculate.")
+print(f"1. Outbound Calls: April row inserted at row {row}")
+offset += 1
+
+# === 2. INBOUND CALLS PURCHASED — row 59 (after +1 offset) ===
+row = INBOUND_PURCHASED_ROW + offset
+sheet.insert_row(
+    ["01/04/2026", "", "", f"=B{row}*C{row}"],
+    index=row,
+    value_input_option="USER_ENTERED",
+)
+print(f"2. Inbound Calls Purchased: April row inserted at row {row}")
+offset += 1
+
+# === 3. OUTBOUND MINUTES PURCHASED — row 75 (after +2 offset) ===
+row = OUTBOUND_PURCHASED_ROW + offset
+sheet.insert_row(
+    ["01/04/2026", "", "1.5", f"=B{row}*C{row}"],
+    index=row,
+    value_input_option="USER_ENTERED",
+)
+print(f"3. Outbound Minutes Purchased: April row inserted at row {row}")
+offset += 1
+
+# === 4. AVERAGE MONTHLY COSTS — row 96 (after +3 offset) ===
+row = AVG_MONTHLY_COSTS_ROW + offset
+sheet.insert_row(
+    ["April", "", "", f"=B{row}+C{row}"],
+    index=row,
+    value_input_option="USER_ENTERED",
+)
+print(f"4. Average Monthly Costs: April row inserted at row {row}")
+
+print("\nDone! Fill in the blank cells and all totals will auto-calculate.")
