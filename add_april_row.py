@@ -33,8 +33,9 @@ sheet.insert_row(
     index=row,
     value_input_option="USER_ENTERED",
 )
-print(f"1. Outbound Calls: April row inserted at row {row}")
-offset += 1
+sheet.insert_row(["", "", "", ""], index=row + 1)  # Empty row below April
+print(f"1. Outbound Calls: April row inserted at row {row} with blank row below")
+offset += 2
 
 # === 2. INBOUND CALLS PURCHASED — row 59 (after +1 offset) ===
 row = INBOUND_PURCHASED_ROW + offset
@@ -43,8 +44,9 @@ sheet.insert_row(
     index=row,
     value_input_option="USER_ENTERED",
 )
-print(f"2. Inbound Calls Purchased: April row inserted at row {row}")
-offset += 1
+sheet.insert_row(["", "", "", ""], index=row + 1)  # Empty row below April
+print(f"2. Inbound Calls Purchased: April row inserted at row {row} with blank row below")
+offset += 2
 
 # === 3. OUTBOUND MINUTES PURCHASED — row 75 (after +2 offset) ===
 row = OUTBOUND_PURCHASED_ROW + offset
@@ -53,8 +55,9 @@ sheet.insert_row(
     index=row,
     value_input_option="USER_ENTERED",
 )
-print(f"3. Outbound Minutes Purchased: April row inserted at row {row}")
-offset += 1
+sheet.insert_row(["", "", "", ""], index=row + 1)  # Empty row below April
+print(f"3. Outbound Minutes Purchased: April row inserted at row {row} with blank row below")
+offset += 2
 
 # === 4. AVERAGE MONTHLY COSTS — row 96 (after +3 offset) ===
 row = AVG_MONTHLY_COSTS_ROW + offset
