@@ -19,7 +19,12 @@ client = gspread.authorize(creds)
 spreadsheet = client.open(SPREADSHEET_NAME)
 sheet = spreadsheet.get_worksheet(SHEET_INDEX)
 
-# === INSERT EMPTY ROW FOR APRIL ===
-sheet.insert_row(["", "", "", ""], index=APRIL_ROW)
+# === INSERT APRIL ROW WITH FORMULA ===
+sheet.insert_row(
+    ["April", "", "$1.50", "=B38*C38"],
+    index=APRIL_ROW,
+    value_input_option="USER_ENTERED",
+)
 
-print(f"Empty row inserted at row {APRIL_ROW}. Ready for you to fill in April's data!")
+print(f"April row inserted at row {APRIL_ROW} with Total formula (=B38*C38).")
+print("Just fill in the Minutes column (B38) and the total will calculate automatically.")
