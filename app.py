@@ -61,7 +61,7 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_USER_ID = os.getenv("SLACK_USER_ID")
 
 MONITOR_DURATION_DAYS = int(os.getenv("MONITOR_DURATION_DAYS", "14"))
-POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))  # 5 minutes
+POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "43200"))  # twice a day (every 12 hours)
 
 MONITOR_FILE = Path(os.getenv("MONITOR_FILE", "monitored_contacts.json"))
 
