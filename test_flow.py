@@ -22,6 +22,7 @@ from app import (
     search_calls_by_phone,
     find_nearest_call,
     get_transcript,
+    get_call_summary,
     format_transcript,
     create_transcript_doc,
     ghl_create_note,
@@ -103,6 +104,24 @@ def main():
     print(f"   Got transcript ({len(transcript_text)} chars)")
     print(f"   Preview: {transcript_text[:200]}...")
 
+    # Step 4b: Get AI summary
+    print(f"\n4b. Fetching AI summary for call {call_id}...")
+    summary_data = get_call_summary(call_id)
+    summary_text = None
+    if summary_data:
+        summary_text = (
+            summary_data.get("summary")
+            or summary_data.get("text")
+            or summary_data.get("content")
+        )
+        if isinstance(summary_text, dict):
+            summary_text = summary_text.get("text", str(summary_text))
+        print(f"   Got summary ({len(summary_text) if summary_text else 0} chars)")
+        if summary_text:
+            print(f"   Preview: {summary_text[:300]}...")
+    else:
+        print("   No AI summary available")
+
     # Step 5: Create Google Doc
     print(f"\n5. Creating Google Doc...")
     opportunity_name = "Test Opportunity"
@@ -113,6 +132,7 @@ def main():
         call_info=nearest_call,
         contact_name=full_name,
         opportunity_name=opportunity_name,
+        summary_text=summary_text,
     )
     print(f"   Doc created: {doc_url}")
 

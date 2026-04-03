@@ -71,8 +71,8 @@ def get_google_services():
     return docs_service, drive_service
 
 
-def create_transcript_doc(title, transcript_text, call_info=None, contact_name=None, opportunity_name=None):
-    """Create a Google Doc with the transcript and share it with anyone who has the link."""
+def create_transcript_doc(title, transcript_text, call_info=None, contact_name=None, opportunity_name=None, summary_text=None):
+    """Create a Google Doc with the summary and transcript, shared with anyone who has the link."""
     docs_service, drive_service = get_google_services()
 
     # Build the document body
@@ -93,7 +93,18 @@ def create_transcript_doc(title, transcript_text, call_info=None, contact_name=N
             body_lines.append(f"Agent: {user.get('name', 'N/A')}")
     body_lines.append("")
     body_lines.append("─" * 40)
+
+    if summary_text:
+        body_lines.append("")
+        body_lines.append("SUMMARY")
+        body_lines.append("─" * 40)
+        body_lines.append(summary_text)
+        body_lines.append("")
+        body_lines.append("─" * 40)
+
     body_lines.append("")
+    body_lines.append("TRANSCRIPT")
+    body_lines.append("─" * 40)
     body_lines.append(transcript_text)
 
     full_text = "\n".join(body_lines)
@@ -247,6 +258,16 @@ def get_transcript(call_id):
     """Fetch transcript for a specific Aircall call."""
     try:
         return aircall_get(f"/calls/{call_id}/transcription")
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            return None
+        raise
+
+
+def get_call_summary(call_id):
+    """Fetch AI-generated call summary from Aircall."""
+    try:
+        return aircall_get(f"/calls/{call_id}/summary")
     except requests.exceptions.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
             return None
@@ -437,12 +458,25 @@ def process_won_opportunity(contact_id, opportunity_name, payload):
     call_id = nearest_call.get("id")
     log.info("Nearest call: id=%s started_at=%s", call_id, nearest_call.get("started_at"))
 
-    # Step 4: Get the transcript
+    # Step 4: Get the transcript and summary
     log.info("Fetching transcript for call %s", call_id)
     transcript_data = get_transcript(call_id)
     transcript_text = format_transcript(transcript_data)
 
-    # Step 5: Create Google Doc with transcript
+    log.info("Fetching AI summary for call %s", call_id)
+    summary_data = get_call_summary(call_id)
+    summary_text = None
+    if summary_data:
+        summary_text = (
+            summary_data.get("summary")
+            or summary_data.get("text")
+            or summary_data.get("content")
+        )
+        if isinstance(summary_text, dict):
+            summary_text = summary_text.get("text", str(summary_text))
+        log.info("Got AI summary (%d chars)", len(summary_text) if summary_text else 0)
+
+    # Step 5: Create Google Doc with summary and transcript
     doc_title = f"Transcript – {contact_name} – {opportunity_name}"
     log.info("Creating Google Doc for call %s", call_id)
     doc_url = create_transcript_doc(
@@ -451,6 +485,7 @@ def process_won_opportunity(contact_id, opportunity_name, payload):
         call_info=nearest_call,
         contact_name=contact_name,
         opportunity_name=opportunity_name,
+        summary_text=summary_text,
     )
 
     # Step 6: Post doc link as a note on the GHL contact
