@@ -538,11 +538,7 @@ def process_won_opportunity(contact_id, opportunity_name, payload):
     )
 
     # Step 6: Post doc link as a note on the GHL contact
-    note_body = (
-        f"Opportunity Won: {opportunity_name}\n"
-        f"Contact: {contact_name} ({phone})\n\n"
-        f"Aircall Transcript: {doc_url}"
-    )
+    note_body = f"Aircall Transcript: {doc_url}"
 
     log.info("Posting transcript note to GHL contact %s", contact_id)
     ghl_create_note(contact_id, note_body)

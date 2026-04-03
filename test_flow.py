@@ -138,11 +138,7 @@ def main():
 
     # Step 6: Post note to GHL
     print(f"\n6. Posting note to GHL contact...")
-    note_body = (
-        f"Opportunity Won: {opportunity_name}\n"
-        f"Contact: {full_name} ({phone})\n\n"
-        f"Aircall Transcript: {doc_url}"
-    )
+    note_body = f"Aircall Transcript: {doc_url}"
     ghl_create_note(contact_id, note_body)
     print("   Note posted!")
 
