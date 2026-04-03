@@ -50,6 +50,7 @@ GHL_BASE_URL = "https://rest.gohighlevel.com/v1"
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
+GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_USER_ID = os.getenv("SLACK_USER_ID")
 
@@ -109,11 +110,18 @@ def create_transcript_doc(title, transcript_text, call_info=None, contact_name=N
 
     full_text = "\n".join(body_lines)
 
-    # Create the doc
-    doc = docs_service.documents().create(body={"title": title}).execute()
-    doc_id = doc["documentId"]
+    # Create the doc in the shared folder via Drive API
+    file_metadata = {
+        "name": title,
+        "mimeType": "application/vnd.google-apps.document",
+    }
+    if GOOGLE_DRIVE_FOLDER_ID:
+        file_metadata["parents"] = [GOOGLE_DRIVE_FOLDER_ID]
 
-    # Insert the transcript text
+    file = drive_service.files().create(body=file_metadata, fields="id").execute()
+    doc_id = file["id"]
+
+    # Insert the text content
     docs_service.documents().batchUpdate(
         documentId=doc_id,
         body={
