@@ -287,98 +287,78 @@ def get_call_summary(call_id):
         raise
 
 
-def _merge_word_segments(segments):
-    """Merge word-level Aircall transcript segments into speaker turns.
+def _extract_segments(data):
+    """Extract the list of transcript segments from various Aircall response formats."""
+    if isinstance(data, list):
+        return data
 
-    Aircall returns individual words with participant_type (internal/external).
-    This groups consecutive words from the same speaker into full sentences.
+    if isinstance(data, dict):
+        # Try common keys where segments might be nested
+        for key in ("transcription", "transcript", "segments", "turns", "content"):
+            val = data.get(key)
+            if isinstance(val, list):
+                return val
+            if isinstance(val, dict):
+                # One more level of nesting
+                for subkey in ("segments", "turns", "content"):
+                    subval = val.get(subkey)
+                    if isinstance(subval, list):
+                        return subval
+
+    return None
+
+
+def format_transcript(transcript_data, call_info=None):
+    """Format Aircall transcript data into readable dialogue.
+
+    Aircall returns segments with participant_type (internal/external),
+    text, and timing info. This groups consecutive segments from the
+    same speaker into dialogue turns.
     """
-    if not segments:
-        return []
+    if not transcript_data:
+        return "[No transcript available]"
 
-    turns = []
+    segments = _extract_segments(transcript_data)
+
+    if not segments:
+        # Last resort: if it's a string, return it; otherwise dump JSON
+        if isinstance(transcript_data, str):
+            return transcript_data
+        return json.dumps(transcript_data, indent=2)
+
+    lines = []
     current_speaker = None
-    current_words = []
+    current_texts = []
 
     for seg in segments:
-        # Determine speaker label
-        participant = seg.get("participant_type", "")
-        user_id = seg.get("user_id")
-        phone = seg.get("phone_number")
-        word = seg.get("text", "")
+        if not isinstance(seg, dict):
+            continue
 
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+
+        # Determine speaker from participant_type
+        participant = seg.get("participant_type", "")
         if participant == "internal":
-            speaker = f"Agent ({user_id})" if user_id else "Agent"
+            speaker = "Agent"
         elif participant == "external":
-            speaker = f"Contact ({phone})" if phone else "Contact"
+            speaker = "Contact"
         else:
             speaker = seg.get("speaker", seg.get("role", "Unknown"))
 
         if speaker != current_speaker:
-            if current_speaker is not None and current_words:
-                turns.append((current_speaker, " ".join(current_words)))
+            if current_speaker is not None and current_texts:
+                lines.append(f"{current_speaker}: {' '.join(current_texts)}")
             current_speaker = speaker
-            current_words = [word]
+            current_texts = [text]
         else:
-            current_words.append(word)
+            current_texts.append(text)
 
-    if current_speaker is not None and current_words:
-        turns.append((current_speaker, " ".join(current_words)))
+    if current_speaker is not None and current_texts:
+        lines.append(f"{current_speaker}: {' '.join(current_texts)}")
 
-    return turns
-
-
-def format_transcript(transcript_data, call_info=None):
-    """Format transcript data into readable text for a GHL note."""
-    lines = []
-
-    if not transcript_data:
-        lines.append("[No transcript available]")
-        return "\n".join(lines)
-
-    transcript = (
-        transcript_data.get("transcription")
-        or transcript_data.get("transcript")
-        or transcript_data
-    )
-
-    if isinstance(transcript, list):
-        # Check if these are word-level segments (Aircall format)
-        if transcript and "participant_type" in transcript[0]:
-            turns = _merge_word_segments(transcript)
-            for speaker, text in turns:
-                lines.append(f"{speaker}: {text}")
-        else:
-            for seg in transcript:
-                speaker = seg.get("speaker", seg.get("role", "Unknown"))
-                text = seg.get("text", seg.get("content", ""))
-                lines.append(f"{speaker}: {text}")
-    elif isinstance(transcript, dict):
-        segments = (
-            transcript.get("segments")
-            or transcript.get("turns")
-            or transcript.get("content")
-        )
-        if isinstance(segments, list):
-            if segments and "participant_type" in segments[0]:
-                turns = _merge_word_segments(segments)
-                for speaker, text in turns:
-                    lines.append(f"{speaker}: {text}")
-            else:
-                for seg in segments:
-                    speaker = seg.get("speaker", seg.get("role", "Unknown"))
-                    text = seg.get("text", seg.get("content", ""))
-                    lines.append(f"{speaker}: {text}")
-        elif "text" in transcript:
-            lines.append(transcript["text"])
-        else:
-            lines.append(json.dumps(transcript, indent=2))
-    elif isinstance(transcript, str):
-        lines.append(transcript)
-    else:
-        lines.append(json.dumps(transcript_data, indent=2))
-
-    return "\n".join(lines)
+    return "\n\n".join(lines) if lines else "[No transcript content]"
 
 
 # ---------------------------------------------------------------------------
