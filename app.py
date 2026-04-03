@@ -406,20 +406,30 @@ def get_call_summary(call_id, api_id=None, api_token=None):
 
 
 def _extract_segments(data):
-    """Extract the list of transcript segments from various Aircall response formats."""
+    """Extract the list of transcript segments from Aircall response.
+
+    Aircall structure: {transcription: {content: {utterances: [...]}}}
+    """
     if isinstance(data, list):
         return data
 
     if isinstance(data, dict):
-        for key in ("transcription", "transcript", "segments", "turns", "content"):
+        # Try all possible nesting paths up to 4 levels deep
+        keys = ("transcription", "transcript", "segments", "turns", "content", "utterances")
+        for key in keys:
             val = data.get(key)
             if isinstance(val, list):
                 return val
             if isinstance(val, dict):
-                for subkey in ("segments", "turns", "content", "utterances"):
+                for subkey in keys:
                     subval = val.get(subkey)
                     if isinstance(subval, list):
                         return subval
+                    if isinstance(subval, dict):
+                        for subsubkey in keys:
+                            subsubval = subval.get(subsubkey)
+                            if isinstance(subsubval, list):
+                                return subsubval
 
     return None
 
@@ -482,17 +492,32 @@ def format_transcript(transcript_data, call_info=None):
 
 
 def extract_summary_text(summary_data):
-    """Extract the summary text from Aircall's summary API response."""
+    """Extract the summary text from Aircall's summary API response.
+
+    Aircall may nest the summary as: {summary: {content: "text"}} or similar.
+    """
     if not summary_data:
         return None
-    summary_text = (
-        summary_data.get("summary")
-        or summary_data.get("text")
-        or summary_data.get("content")
-    )
-    if isinstance(summary_text, dict):
-        summary_text = summary_text.get("text", str(summary_text))
-    return summary_text
+
+    # Walk through possible nesting to find a string
+    def _find_text(data):
+        if isinstance(data, str):
+            return data
+        if isinstance(data, dict):
+            for key in ("content", "text", "summary", "body"):
+                val = data.get(key)
+                if isinstance(val, str):
+                    return val
+            # Go one level deeper
+            for key in ("summary", "content", "text"):
+                val = data.get(key)
+                if isinstance(val, dict):
+                    result = _find_text(val)
+                    if result:
+                        return result
+        return None
+
+    return _find_text(summary_data)
 
 
 # ---------------------------------------------------------------------------
