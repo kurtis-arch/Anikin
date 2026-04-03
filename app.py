@@ -308,12 +308,24 @@ def _extract_segments(data):
     return None
 
 
+def _format_timestamp(seconds):
+    """Convert seconds to MM:SS format."""
+    if not seconds:
+        return "00:00"
+    mins = int(seconds) // 60
+    secs = int(seconds) % 60
+    return f"{mins:02d}:{secs:02d}"
+
+
 def format_transcript(transcript_data, call_info=None):
     """Format Aircall transcript data into readable dialogue.
 
-    Aircall returns segments with participant_type (internal/external),
-    text, and timing info. This groups consecutive segments from the
-    same speaker into dialogue turns.
+    Output format (similar to Fireflies):
+        Agent · 00:11
+        Hi. Is this Caroline?
+
+        Contact · 00:15
+        Yeah. This is her.
     """
     if not transcript_data:
         return "[No transcript available]"
@@ -321,14 +333,11 @@ def format_transcript(transcript_data, call_info=None):
     segments = _extract_segments(transcript_data)
 
     if not segments:
-        # Last resort: if it's a string, return it; otherwise dump JSON
         if isinstance(transcript_data, str):
             return transcript_data
         return json.dumps(transcript_data, indent=2)
 
     lines = []
-    current_speaker = None
-    current_texts = []
 
     for seg in segments:
         if not isinstance(seg, dict):
@@ -338,7 +347,7 @@ def format_transcript(transcript_data, call_info=None):
         if not text:
             continue
 
-        # Determine speaker from participant_type
+        # Determine speaker
         participant = seg.get("participant_type", "")
         if participant == "internal":
             speaker = "Agent"
@@ -347,18 +356,15 @@ def format_transcript(transcript_data, call_info=None):
         else:
             speaker = seg.get("speaker", seg.get("role", "Unknown"))
 
-        if speaker != current_speaker:
-            if current_speaker is not None and current_texts:
-                lines.append(f"{current_speaker}: {' '.join(current_texts)}")
-            current_speaker = speaker
-            current_texts = [text]
-        else:
-            current_texts.append(text)
+        # Get timestamp
+        start_time = seg.get("start_time", seg.get("start", 0))
+        timestamp = _format_timestamp(start_time)
 
-    if current_speaker is not None and current_texts:
-        lines.append(f"{current_speaker}: {' '.join(current_texts)}")
+        lines.append(f"{speaker} · {timestamp}")
+        lines.append(text)
+        lines.append("")
 
-    return "\n\n".join(lines) if lines else "[No transcript content]"
+    return "\n".join(lines).strip() if lines else "[No transcript content]"
 
 
 # ---------------------------------------------------------------------------
