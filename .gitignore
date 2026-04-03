@@ -4,3 +4,4 @@ __pycache__/
 transcripts/
 .venv/
 venv/
+credentials.json

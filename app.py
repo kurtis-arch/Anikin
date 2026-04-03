@@ -3,14 +3,18 @@
 
 Webhook server that listens for GoHighLevel "opportunity won" events,
 pulls the call transcript from Aircall (matched by contact phone number
-and closest timestamp), and posts it as a note on the GHL contact.
+and closest timestamp), saves it to a Google Doc (shared via link),
+posts the link as a note on the GHL contact, and notifies the closer on Slack.
 
 Flow:
   1. GHL fires OpportunityStatusUpdate webhook (status=won)
   2. We fetch the contact's phone number from GHL
   3. We search Aircall for calls to that number
   4. We pick the call nearest to the won timestamp
-  5. We pull the transcript and post it as a note on the GHL contact
+  5. We pull the transcript
+  6. We create a Google Doc with the transcript (anyone with link can view)
+  7. We post the doc link as a note on the GHL contact
+  8. We notify the closer on Slack with the doc link
 """
 
 import base64
@@ -24,6 +28,8 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 load_dotenv()
 
@@ -43,6 +49,111 @@ GHL_API_VERSION = os.getenv("GHL_API_VERSION", "2021-07-28")
 GHL_BASE_URL = "https://services.leadconnectorhq.com"
 
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+
+GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+
+
+# ---------------------------------------------------------------------------
+# Google Docs helpers
+# ---------------------------------------------------------------------------
+def get_google_services():
+    """Build Google Docs and Drive service clients from service account credentials."""
+    creds = service_account.Credentials.from_service_account_file(
+        GOOGLE_SERVICE_ACCOUNT_FILE,
+        scopes=[
+            "https://www.googleapis.com/auth/documents",
+            "https://www.googleapis.com/auth/drive",
+        ],
+    )
+    docs_service = build("docs", "v1", credentials=creds)
+    drive_service = build("drive", "v3", credentials=creds)
+    return docs_service, drive_service
+
+
+def create_transcript_doc(title, transcript_text, call_info=None, contact_name=None, opportunity_name=None):
+    """Create a Google Doc with the transcript and share it with anyone who has the link."""
+    docs_service, drive_service = get_google_services()
+
+    # Build the document body
+    body_lines = []
+    if opportunity_name:
+        body_lines.append(f"Opportunity: {opportunity_name}")
+    if contact_name:
+        body_lines.append(f"Contact: {contact_name}")
+    if call_info:
+        started = call_info.get("started_at")
+        if started:
+            body_lines.append(f"Call Date: {datetime.fromtimestamp(started).isoformat()}")
+        body_lines.append(f"Call ID: {call_info.get('id', 'N/A')}")
+        body_lines.append(f"Direction: {call_info.get('direction', 'N/A')}")
+        body_lines.append(f"Duration: {call_info.get('duration', 0)}s")
+        user = call_info.get("user")
+        if user:
+            body_lines.append(f"Agent: {user.get('name', 'N/A')}")
+    body_lines.append("")
+    body_lines.append("─" * 40)
+    body_lines.append("")
+    body_lines.append(transcript_text)
+
+    full_text = "\n".join(body_lines)
+
+    # Create the doc
+    doc = docs_service.documents().create(body={"title": title}).execute()
+    doc_id = doc["documentId"]
+
+    # Insert the transcript text
+    docs_service.documents().batchUpdate(
+        documentId=doc_id,
+        body={
+            "requests": [
+                {
+                    "insertText": {
+                        "location": {"index": 1},
+                        "text": full_text,
+                    }
+                }
+            ]
+        },
+    ).execute()
+
+    # Share: anyone with the link can view
+    drive_service.permissions().create(
+        fileId=doc_id,
+        body={"type": "anyone", "role": "reader"},
+    ).execute()
+
+    doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+    log.info("Created Google Doc: %s", doc_url)
+    return doc_url
+
+
+# ---------------------------------------------------------------------------
+# Slack helpers
+# ---------------------------------------------------------------------------
+def send_slack_notification(contact_name, opportunity_name, doc_url, phone=None):
+    """Send a Slack message notifying the closer that a transcript is ready."""
+    if not SLACK_WEBHOOK_URL:
+        log.warning("SLACK_WEBHOOK_URL not set, skipping notification")
+        return
+
+    message = (
+        f"*Opportunity Won:* {opportunity_name}\n"
+        f"*Contact:* {contact_name}"
+    )
+    if phone:
+        message += f" ({phone})"
+    message += f"\n*Transcript:* <{doc_url}|View Google Doc>"
+
+    resp = requests.post(
+        SLACK_WEBHOOK_URL,
+        json={"text": message},
+        timeout=15,
+    )
+    if resp.ok:
+        log.info("Slack notification sent")
+    else:
+        log.warning("Slack notification failed: %s %s", resp.status_code, resp.text)
 
 
 # ---------------------------------------------------------------------------
@@ -302,23 +413,37 @@ def process_won_opportunity(contact_id, opportunity_name, payload):
     # Step 4: Get the transcript
     log.info("Fetching transcript for call %s", call_id)
     transcript_data = get_transcript(call_id)
-    transcript_text = format_transcript(transcript_data, call_info=nearest_call)
+    transcript_text = format_transcript(transcript_data)
 
-    # Step 5: Post as a note on the GHL contact
+    # Step 5: Create Google Doc with transcript
+    doc_title = f"Transcript – {contact_name} – {opportunity_name}"
+    log.info("Creating Google Doc for call %s", call_id)
+    doc_url = create_transcript_doc(
+        title=doc_title,
+        transcript_text=transcript_text,
+        call_info=nearest_call,
+        contact_name=contact_name,
+        opportunity_name=opportunity_name,
+    )
+
+    # Step 6: Post doc link as a note on the GHL contact
     note_body = (
         f"Opportunity Won: {opportunity_name}\n"
         f"Contact: {contact_name} ({phone})\n\n"
-        f"--- Aircall Transcript ---\n\n"
-        f"{transcript_text}"
+        f"Aircall Transcript: {doc_url}"
     )
 
     log.info("Posting transcript note to GHL contact %s", contact_id)
     ghl_create_note(contact_id, note_body)
 
+    # Step 7: Notify the closer on Slack
+    send_slack_notification(contact_name, opportunity_name, doc_url, phone=phone)
+
     return {
         "status": "success",
         "call_id": call_id,
         "contact": contact_name,
+        "doc_url": doc_url,
         "transcript_length": len(transcript_text),
     }
 
@@ -335,6 +460,10 @@ def health():
         missing.append("AIRCALL_API_TOKEN")
     if not GHL_API_TOKEN:
         missing.append("GHL_API_TOKEN")
+    if not os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE):
+        missing.append("GOOGLE_SERVICE_ACCOUNT_FILE")
+    if not SLACK_WEBHOOK_URL:
+        missing.append("SLACK_WEBHOOK_URL")
     return jsonify({
         "status": "ok" if not missing else "misconfigured",
         "missing_env_vars": missing,
