@@ -118,7 +118,11 @@ def create_transcript_doc(title, transcript_text, call_info=None, contact_name=N
     if GOOGLE_DRIVE_FOLDER_ID:
         file_metadata["parents"] = [GOOGLE_DRIVE_FOLDER_ID]
 
-    file = drive_service.files().create(body=file_metadata, fields="id").execute()
+    file = drive_service.files().create(
+        body=file_metadata,
+        fields="id",
+        supportsAllDrives=True,
+    ).execute()
     doc_id = file["id"]
 
     # Insert the text content
@@ -140,6 +144,7 @@ def create_transcript_doc(title, transcript_text, call_info=None, contact_name=N
     drive_service.permissions().create(
         fileId=doc_id,
         body={"type": "anyone", "role": "reader"},
+        supportsAllDrives=True,
     ).execute()
 
     doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
