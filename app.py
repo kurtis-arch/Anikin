@@ -61,7 +61,7 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_USER_ID = os.getenv("SLACK_USER_ID")
 
 MONITOR_DURATION_DAYS = int(os.getenv("MONITOR_DURATION_DAYS", "14"))
-POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "43200"))  # twice a day (every 12 hours)
+POLL_TIMES = os.getenv("POLL_TIMES", "10:00,18:00").split(",")  # 10am and 6pm
 
 MONITOR_FILE = Path(os.getenv("MONITOR_FILE", "monitored_contacts.json"))
 
@@ -677,14 +677,34 @@ def poll_monitored_contacts():
 
 
 def background_poller():
-    """Run the polling loop in a background thread."""
-    log.info("Background poller started (interval: %ds)", POLL_INTERVAL_SECONDS)
+    """Run the polling loop at scheduled times (default 10am and 6pm)."""
+    log.info("Background poller started (scheduled times: %s)", POLL_TIMES)
+    last_run_date_hour = None
+
     while True:
-        try:
-            poll_monitored_contacts()
-        except Exception:
-            log.exception("Error in background poller")
-        time.sleep(POLL_INTERVAL_SECONDS)
+        now = datetime.now()
+        current = f"{now.strftime('%Y-%m-%d')}_{now.hour}:{now.minute:02d}"
+
+        for poll_time in POLL_TIMES:
+            poll_time = poll_time.strip()
+            try:
+                hour, minute = map(int, poll_time.split(":"))
+            except ValueError:
+                continue
+
+            scheduled = f"{now.strftime('%Y-%m-%d')}_{hour}:{minute:02d}"
+
+            # Run if we're within 5 minutes after the scheduled time and haven't run yet
+            if (now.hour == hour and now.minute >= minute and now.minute < minute + 5
+                    and last_run_date_hour != scheduled):
+                log.info("Running scheduled poll at %s", poll_time)
+                try:
+                    poll_monitored_contacts()
+                except Exception:
+                    log.exception("Error in background poller")
+                last_run_date_hour = scheduled
+
+        time.sleep(60)  # Check every minute
 
 
 # ---------------------------------------------------------------------------
