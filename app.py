@@ -45,8 +45,7 @@ AIRCALL_API_TOKEN = os.getenv("AIRCALL_API_TOKEN")
 AIRCALL_BASE_URL = "https://api.aircall.io/v1"
 
 GHL_API_TOKEN = os.getenv("GHL_API_TOKEN")
-GHL_API_VERSION = os.getenv("GHL_API_VERSION", "2021-07-28")
-GHL_BASE_URL = "https://services.leadconnectorhq.com"
+GHL_BASE_URL = "https://rest.gohighlevel.com/v1"
 
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
@@ -319,7 +318,6 @@ def ghl_headers():
     return {
         "Authorization": f"Bearer {GHL_API_TOKEN}",
         "Content-Type": "application/json",
-        "Version": GHL_API_VERSION,
     }
 
 
@@ -331,13 +329,14 @@ def ghl_get_contact(contact_id):
         timeout=30,
     )
     resp.raise_for_status()
-    return resp.json().get("contact", {})
+    data = resp.json()
+    return data.get("contact", data)
 
 
 def ghl_create_note(contact_id, body):
     """Create a note on a GHL contact."""
     resp = requests.post(
-        f"{GHL_BASE_URL}/contacts/{contact_id}/notes",
+        f"{GHL_BASE_URL}/contacts/{contact_id}/notes/",
         headers=ghl_headers(),
         json={"body": body},
         timeout=30,
