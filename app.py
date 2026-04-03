@@ -51,7 +51,8 @@ GHL_BASE_URL = "https://services.leadconnectorhq.com"
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
-SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
+SLACK_USER_ID = os.getenv("SLACK_USER_ID")
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +132,15 @@ def create_transcript_doc(title, transcript_text, call_info=None, contact_name=N
 # ---------------------------------------------------------------------------
 # Slack helpers
 # ---------------------------------------------------------------------------
-def send_slack_notification(contact_name, opportunity_name, doc_url, phone=None):
-    """Send a Slack message notifying the closer that a transcript is ready."""
-    if not SLACK_WEBHOOK_URL:
-        log.warning("SLACK_WEBHOOK_URL not set, skipping notification")
+def send_slack_notification(contact_name, opportunity_name, doc_url, phone=None, user_id=None):
+    """Send a Slack DM notifying the closer that a transcript is ready."""
+    if not SLACK_BOT_TOKEN:
+        log.warning("SLACK_BOT_TOKEN not set, skipping notification")
+        return
+
+    target_user = user_id or SLACK_USER_ID
+    if not target_user:
+        log.warning("No Slack user ID configured, skipping notification")
         return
 
     message = (
@@ -145,15 +151,37 @@ def send_slack_notification(contact_name, opportunity_name, doc_url, phone=None)
         message += f" ({phone})"
     message += f"\n*Transcript:* <{doc_url}|View Google Doc>"
 
-    resp = requests.post(
-        SLACK_WEBHOOK_URL,
-        json={"text": message},
+    headers = {
+        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    # Open a DM channel with the user
+    dm_resp = requests.post(
+        "https://slack.com/api/conversations.open",
+        headers=headers,
+        json={"users": target_user},
         timeout=15,
     )
-    if resp.ok:
-        log.info("Slack notification sent")
+    dm_data = dm_resp.json()
+    if not dm_data.get("ok"):
+        log.warning("Failed to open Slack DM: %s", dm_data.get("error"))
+        return
+
+    channel_id = dm_data["channel"]["id"]
+
+    # Send the message
+    msg_resp = requests.post(
+        "https://slack.com/api/chat.postMessage",
+        headers=headers,
+        json={"channel": channel_id, "text": message},
+        timeout=15,
+    )
+    msg_data = msg_resp.json()
+    if msg_data.get("ok"):
+        log.info("Slack notification sent to %s", target_user)
     else:
-        log.warning("Slack notification failed: %s %s", resp.status_code, resp.text)
+        log.warning("Slack notification failed: %s", msg_data.get("error"))
 
 
 # ---------------------------------------------------------------------------
