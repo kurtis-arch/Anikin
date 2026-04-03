@@ -2,15 +2,16 @@
 """Manual test script for the Aircall-GHL transcript integration.
 
 Searches GHL for a contact by name, finds their Aircall calls,
-pulls the transcript, creates a Google Doc, posts it as a GHL note,
-and sends a Slack DM.
+pulls ALL transcripts, creates PDFs, posts notes, and sends Slack DMs.
 
 Usage:
-    python test_flow.py "Zachary Smith"
+    python test_flow.py "Caroline Dunno"
+    python test_flow.py "Caroline Dunno" --latest   # Only the most recent call
 """
 
 import sys
 import time
+from datetime import datetime
 
 from dotenv import load_dotenv
 
@@ -20,11 +21,11 @@ from app import (
     ghl_headers,
     GHL_BASE_URL,
     search_calls_by_phone,
-    find_nearest_call,
     get_transcript,
     get_call_summary,
     format_transcript,
-    create_transcript_doc,
+    extract_summary_text,
+    create_transcript_pdf,
     ghl_create_note,
     send_slack_notification,
     log,
@@ -47,7 +48,8 @@ def search_ghl_contact(name):
 
 
 def main():
-    contact_name = sys.argv[1] if len(sys.argv) > 1 else "Zachary Smith"
+    contact_name = sys.argv[1] if len(sys.argv) > 1 else "Caroline Dunno"
+    latest_only = "--latest" in sys.argv
 
     print(f"=== Testing Transcript Flow for: {contact_name} ===\n")
 
@@ -79,76 +81,79 @@ def main():
         sys.exit(1)
 
     print(f"   Found {len(calls)} calls")
-    for c in calls[:5]:
-        from datetime import datetime
+    for c in calls[:10]:
         started = c.get("started_at", 0)
         date_str = datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M") if started else "N/A"
         duration = c.get("duration", 0)
         direction = c.get("direction", "N/A")
         print(f"   - Call {c['id']}: {date_str} | {direction} | {duration}s")
 
-    # Step 3: Pick the most recent call
-    nearest_call = calls[0]  # Already sorted desc
-    call_id = nearest_call.get("id")
-    print(f"\n3. Using most recent call: {call_id}")
+    # If --latest, only process the most recent call
+    calls_to_process = [calls[0]] if latest_only else calls
+    print(f"\n   Processing {len(calls_to_process)} call(s)...")
 
-    # Step 4: Get transcript
-    print(f"\n4. Fetching transcript for call {call_id}...")
-    transcript_data = get_transcript(call_id)
-    if not transcript_data:
-        print("   No transcript available for this call!")
-        print("   (AI Assist may not be enabled on this Aircall account)")
-        sys.exit(1)
-
-    transcript_text = format_transcript(transcript_data)
-    print(f"   Got transcript ({len(transcript_text)} chars)")
-    print(f"   Preview: {transcript_text[:200]}...")
-
-    # Step 4b: Get AI summary
-    print(f"\n4b. Fetching AI summary for call {call_id}...")
-    summary_data = get_call_summary(call_id)
-    summary_text = None
-    if summary_data:
-        summary_text = (
-            summary_data.get("summary")
-            or summary_data.get("text")
-            or summary_data.get("content")
-        )
-        if isinstance(summary_text, dict):
-            summary_text = summary_text.get("text", str(summary_text))
-        print(f"   Got summary ({len(summary_text) if summary_text else 0} chars)")
-        if summary_text:
-            print(f"   Preview: {summary_text[:300]}...")
-    else:
-        print("   No AI summary available")
-
-    # Step 5: Create Google Doc
-    print(f"\n5. Creating Google Doc...")
     opportunity_name = "Test Opportunity"
-    doc_title = f"Transcript – {full_name} – {opportunity_name}"
-    doc_url = create_transcript_doc(
-        title=doc_title,
-        transcript_text=transcript_text,
-        call_info=nearest_call,
-        contact_name=full_name,
-        opportunity_name=opportunity_name,
-        summary_text=summary_text,
-    )
-    print(f"   Doc created: {doc_url}")
+    processed = 0
 
-    # Step 6: Post note to GHL
-    print(f"\n6. Posting note to GHL contact...")
-    note_body = f"Aircall Transcript: {doc_url}"
-    ghl_create_note(contact_id, note_body)
-    print("   Note posted!")
+    for call in calls_to_process:
+        call_id = call.get("id")
+        started = call.get("started_at", 0)
+        duration = call.get("duration", 0)
+        call_date_str = datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M") if started else "Unknown"
 
-    # Step 7: Send Slack notification
-    print(f"\n7. Sending Slack notification...")
-    send_slack_notification(full_name, opportunity_name, doc_url, phone=phone)
-    print("   Slack notification sent!")
+        if duration < 5:
+            print(f"\n   Skipping call {call_id} (too short: {duration}s)")
+            continue
 
-    print(f"\n=== Test Complete ===")
-    print(f"Google Doc: {doc_url}")
+        print(f"\n--- Call {call_id} ({call_date_str}, {duration}s) ---")
+
+        # Get transcript
+        print(f"   Fetching transcript...")
+        transcript_data = get_transcript(call_id)
+        if not transcript_data:
+            print("   No transcript available, skipping")
+            continue
+
+        transcript_text = format_transcript(transcript_data)
+        print(f"   Got transcript ({len(transcript_text)} chars)")
+
+        # Get summary
+        print(f"   Fetching AI summary...")
+        summary_data = get_call_summary(call_id)
+        summary_text = extract_summary_text(summary_data)
+        if summary_text:
+            print(f"   Got summary ({len(summary_text)} chars)")
+        else:
+            print("   No summary available")
+
+        # Create PDF
+        print(f"   Creating PDF...")
+        pdf_title = f"Transcript – {full_name} – {call_date_str}"
+        pdf_url = create_transcript_pdf(
+            title=pdf_title,
+            transcript_text=transcript_text,
+            call_info=call,
+            contact_name=full_name,
+            opportunity_name=opportunity_name,
+            summary_text=summary_text,
+        )
+        print(f"   PDF: {pdf_url}")
+
+        # Post note to GHL
+        print(f"   Posting note to GHL...")
+        note_body = f"Aircall Transcript ({call_date_str}): {pdf_url}"
+        ghl_create_note(contact_id, note_body)
+        print("   Note posted!")
+
+        # Slack notification
+        print(f"   Sending Slack notification...")
+        send_slack_notification(full_name, opportunity_name, pdf_url, phone=phone, call_date=call_date_str)
+        print("   Sent!")
+
+        processed += 1
+        time.sleep(0.5)
+
+    print(f"\n=== Test Complete: {processed} transcript(s) processed ===")
 
 
 if __name__ == "__main__":

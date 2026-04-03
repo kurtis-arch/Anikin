@@ -5,3 +5,4 @@ transcripts/
 .venv/
 venv/
 credentials.json
+monitored_contacts.json
