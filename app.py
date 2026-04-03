@@ -46,12 +46,8 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-AIRCALL_API_ID = os.getenv("AIRCALL_API_ID")
-AIRCALL_API_TOKEN = os.getenv("AIRCALL_API_TOKEN")
-AIRCALL_BASE_URL = "https://api.aircall.io/v1"
-
-GHL_API_TOKEN = os.getenv("GHL_API_TOKEN")
 GHL_BASE_URL = "https://rest.gohighlevel.com/v1"
+AIRCALL_BASE_URL = "https://api.aircall.io/v1"
 
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
@@ -61,9 +57,44 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_USER_ID = os.getenv("SLACK_USER_ID")
 
 MONITOR_DURATION_DAYS = int(os.getenv("MONITOR_DURATION_DAYS", "14"))
-POLL_TIMES = os.getenv("POLL_TIMES", "10:00,18:00").split(",")  # 10am and 6pm
+POLL_TIMES = os.getenv("POLL_TIMES", "10:00,18:00").split(",")
 
 MONITOR_FILE = Path(os.getenv("MONITOR_FILE", "monitored_contacts.json"))
+PARTNERS_FILE = Path(os.getenv("PARTNERS_FILE", "partners.json"))
+
+# Fallback single-account config (used if partners.json doesn't exist)
+AIRCALL_API_ID = os.getenv("AIRCALL_API_ID")
+AIRCALL_API_TOKEN = os.getenv("AIRCALL_API_TOKEN")
+GHL_API_TOKEN = os.getenv("GHL_API_TOKEN")
+
+
+# ---------------------------------------------------------------------------
+# Multi-account partner config
+# ---------------------------------------------------------------------------
+def load_partners():
+    """Load partner config keyed by GHL location ID."""
+    if PARTNERS_FILE.exists():
+        return json.loads(PARTNERS_FILE.read_text(encoding="utf-8"))
+    return {}
+
+
+def get_partner_config(location_id):
+    """Get credentials for a specific partner by GHL location ID.
+
+    Falls back to .env credentials if partners.json doesn't exist
+    or the location_id isn't found.
+    """
+    partners = load_partners()
+    if location_id and location_id in partners:
+        return partners[location_id]
+
+    # Fallback to single-account .env config
+    return {
+        "name": "Default",
+        "ghl_token": GHL_API_TOKEN,
+        "aircall_api_id": AIRCALL_API_ID,
+        "aircall_api_token": AIRCALL_API_TOKEN,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +112,7 @@ def save_monitored_contacts(data):
     MONITOR_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def add_monitored_contact(contact_id, phone, contact_name, opportunity_name, processed_call_ids=None):
+def add_monitored_contact(contact_id, phone, contact_name, opportunity_name, processed_call_ids=None, location_id=None):
     """Add a contact to the monitoring list with a 2-week expiry."""
     contacts = load_monitored_contacts()
     expiry = (datetime.now() + timedelta(days=MONITOR_DURATION_DAYS)).isoformat()
@@ -90,6 +121,7 @@ def add_monitored_contact(contact_id, phone, contact_name, opportunity_name, pro
         "phone": phone,
         "contact_name": contact_name,
         "opportunity_name": opportunity_name,
+        "location_id": location_id,
         "won_at": datetime.now().isoformat(),
         "expires_at": expiry,
         "processed_call_ids": processed_call_ids or [],
@@ -311,17 +343,19 @@ def send_slack_notification(contact_name, opportunity_name, doc_url, phone=None,
 # ---------------------------------------------------------------------------
 # Aircall helpers
 # ---------------------------------------------------------------------------
-def aircall_headers():
-    creds = base64.b64encode(f"{AIRCALL_API_ID}:{AIRCALL_API_TOKEN}".encode()).decode()
+def aircall_headers(api_id=None, api_token=None):
+    aid = api_id or AIRCALL_API_ID
+    atok = api_token or AIRCALL_API_TOKEN
+    creds = base64.b64encode(f"{aid}:{atok}".encode()).decode()
     return {"Authorization": f"Basic {creds}"}
 
 
-def aircall_get(endpoint, params=None):
+def aircall_get(endpoint, params=None, api_id=None, api_token=None):
     """GET request to Aircall API with retry logic."""
     url = f"{AIRCALL_BASE_URL}{endpoint}"
     for attempt in range(4):
         try:
-            resp = requests.get(url, headers=aircall_headers(), params=params, timeout=30)
+            resp = requests.get(url, headers=aircall_headers(api_id, api_token), params=params, timeout=30)
             if resp.status_code == 429:
                 wait = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
                 log.warning("Aircall rate limited, retrying in %ds", wait)
@@ -339,32 +373,32 @@ def aircall_get(endpoint, params=None):
     return None
 
 
-def search_calls_by_phone(phone_number):
+def search_calls_by_phone(phone_number, api_id=None, api_token=None):
     """Search Aircall calls by phone number, returns list sorted by most recent."""
     data = aircall_get("/calls/search", params={
         "phone_number": phone_number,
         "order": "desc",
         "per_page": 50,
-    })
+    }, api_id=api_id, api_token=api_token)
     if not data:
         return []
     return data.get("calls", [])
 
 
-def get_transcript(call_id):
+def get_transcript(call_id, api_id=None, api_token=None):
     """Fetch transcript for a specific Aircall call."""
     try:
-        return aircall_get(f"/calls/{call_id}/transcription")
+        return aircall_get(f"/calls/{call_id}/transcription", api_id=api_id, api_token=api_token)
     except requests.exceptions.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
             return None
         raise
 
 
-def get_call_summary(call_id):
+def get_call_summary(call_id, api_id=None, api_token=None):
     """Fetch AI-generated call summary from Aircall."""
     try:
-        return aircall_get(f"/calls/{call_id}/summary")
+        return aircall_get(f"/calls/{call_id}/summary", api_id=api_id, api_token=api_token)
     except requests.exceptions.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
             return None
@@ -464,18 +498,18 @@ def extract_summary_text(summary_data):
 # ---------------------------------------------------------------------------
 # GHL helpers
 # ---------------------------------------------------------------------------
-def ghl_headers():
+def ghl_headers(token=None):
     return {
-        "Authorization": f"Bearer {GHL_API_TOKEN}",
+        "Authorization": f"Bearer {token or GHL_API_TOKEN}",
         "Content-Type": "application/json",
     }
 
 
-def ghl_get_contact(contact_id):
+def ghl_get_contact(contact_id, token=None):
     """Fetch contact details from GHL to get phone number."""
     resp = requests.get(
         f"{GHL_BASE_URL}/contacts/{contact_id}",
-        headers=ghl_headers(),
+        headers=ghl_headers(token),
         timeout=30,
     )
     resp.raise_for_status()
@@ -483,11 +517,11 @@ def ghl_get_contact(contact_id):
     return data.get("contact", data)
 
 
-def ghl_create_note(contact_id, body):
+def ghl_create_note(contact_id, body, token=None):
     """Create a note on a GHL contact."""
     resp = requests.post(
         f"{GHL_BASE_URL}/contacts/{contact_id}/notes/",
-        headers=ghl_headers(),
+        headers=ghl_headers(token),
         json={"body": body},
         timeout=30,
     )
@@ -498,8 +532,13 @@ def ghl_create_note(contact_id, body):
 # ---------------------------------------------------------------------------
 # Process a single call → Google Doc + GHL note + Slack
 # ---------------------------------------------------------------------------
-def process_single_call(call, contact_id, contact_name, opportunity_name, phone):
+def process_single_call(call, contact_id, contact_name, opportunity_name, phone, partner=None):
     """Process one Aircall call: get transcript, create doc, post note, notify."""
+    partner = partner or {}
+    ac_id = partner.get("aircall_api_id")
+    ac_tok = partner.get("aircall_api_token")
+    ghl_tok = partner.get("ghl_token")
+
     call_id = call.get("id")
     started = call.get("started_at", 0)
     duration = call.get("duration", 0)
@@ -512,10 +551,10 @@ def process_single_call(call, contact_id, contact_name, opportunity_name, phone)
     # Format call date for the note
     call_date_str = datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M") if started else "Unknown"
 
-    log.info("Processing call %s (%s, %ds)", call_id, call_date_str, duration)
+    log.info("Processing call %s (%s, %ds) for %s", call_id, call_date_str, duration, partner.get("name", "Default"))
 
     # Get transcript
-    transcript_data = get_transcript(call_id)
+    transcript_data = get_transcript(call_id, api_id=ac_id, api_token=ac_tok)
     if not transcript_data:
         log.info("No transcript for call %s, skipping", call_id)
         return None
@@ -523,13 +562,13 @@ def process_single_call(call, contact_id, contact_name, opportunity_name, phone)
     transcript_text = format_transcript(transcript_data)
 
     # Get summary
-    summary_data = get_call_summary(call_id)
+    summary_data = get_call_summary(call_id, api_id=ac_id, api_token=ac_tok)
     summary_text = extract_summary_text(summary_data)
 
-    # Create PDF and upload to Drive
-    pdf_title = f"Transcript – {contact_name} – {call_date_str}"
+    # Create Google Doc
+    doc_title = f"Transcript – {contact_name} – {call_date_str}"
     doc_url = create_transcript_pdf(
-        title=pdf_title,
+        title=doc_title,
         transcript_text=transcript_text,
         call_info=call,
         contact_name=contact_name,
@@ -539,7 +578,7 @@ def process_single_call(call, contact_id, contact_name, opportunity_name, phone)
 
     # Post note to GHL with call date
     note_body = f"Aircall Transcript ({call_date_str}): {doc_url}"
-    ghl_create_note(contact_id, note_body)
+    ghl_create_note(contact_id, note_body, token=ghl_tok)
 
     # Slack notification
     send_slack_notification(
@@ -573,30 +612,38 @@ def ghl_webhook():
     contact_id = payload.get("contactId")
     opportunity_id = payload.get("id")
     opportunity_name = payload.get("name", "Unknown")
+    location_id = payload.get("locationId", payload.get("location_id"))
 
     if not contact_id:
         log.error("No contactId in webhook payload")
         return jsonify({"error": "Missing contactId"}), 400
 
+    # Look up partner credentials
+    partner = get_partner_config(location_id)
+    partner_name = partner.get("name", "Unknown")
     log.info(
-        "Processing won opportunity: id=%s name=%s contact=%s",
-        opportunity_id, opportunity_name, contact_id,
+        "Processing won opportunity: id=%s name=%s contact=%s partner=%s",
+        opportunity_id, opportunity_name, contact_id, partner_name,
     )
 
     try:
-        result = process_won_opportunity(contact_id, opportunity_name, payload)
+        result = process_won_opportunity(contact_id, opportunity_name, payload, partner)
         return jsonify(result), 200
     except Exception:
         log.exception("Error processing won opportunity %s", opportunity_id)
         return jsonify({"error": "Internal processing error"}), 500
 
 
-def process_won_opportunity(contact_id, opportunity_name, payload):
+def process_won_opportunity(contact_id, opportunity_name, payload, partner=None):
     """Full pipeline: pull ALL transcripts for the contact, start 2-week monitoring."""
+    partner = partner or get_partner_config(None)
+    ghl_tok = partner.get("ghl_token")
+    ac_id = partner.get("aircall_api_id")
+    ac_tok = partner.get("aircall_api_token")
 
     # Step 1: Get contact phone number from GHL
     log.info("Fetching GHL contact %s", contact_id)
-    contact = ghl_get_contact(contact_id)
+    contact = ghl_get_contact(contact_id, token=ghl_tok)
     phone = contact.get("phone")
     if not phone:
         log.warning("No phone number for contact %s", contact_id)
@@ -607,7 +654,7 @@ def process_won_opportunity(contact_id, opportunity_name, payload):
 
     # Step 2: Search Aircall for ALL calls to this number
     log.info("Searching Aircall for all calls to %s", phone)
-    calls = search_calls_by_phone(phone)
+    calls = search_calls_by_phone(phone, api_id=ac_id, api_token=ac_tok)
     if not calls:
         log.warning("No Aircall calls found for %s", phone)
         return {"status": "no_calls_found"}
@@ -617,18 +664,20 @@ def process_won_opportunity(contact_id, opportunity_name, payload):
     # Step 3: Process ALL calls with transcripts
     processed_ids = []
     for call in calls:
-        call_id = process_single_call(call, contact_id, contact_name, opportunity_name, phone)
+        call_id = process_single_call(call, contact_id, contact_name, opportunity_name, phone, partner=partner)
         if call_id:
             processed_ids.append(call_id)
         time.sleep(0.5)  # Rate limit protection
 
     # Step 4: Add contact to monitoring list for 2 weeks
+    location_id = payload.get("locationId", payload.get("location_id"))
     add_monitored_contact(
         contact_id=contact_id,
         phone=phone,
         contact_name=contact_name,
         opportunity_name=opportunity_name,
         processed_call_ids=processed_ids,
+        location_id=location_id,
     )
 
     return {
@@ -656,20 +705,24 @@ def poll_monitored_contacts():
         phone = info["phone"]
         contact_name = info["contact_name"]
         opportunity_name = info["opportunity_name"]
+        location_id = info.get("location_id")
         processed_ids = info.get("processed_call_ids", [])
 
-        calls = search_calls_by_phone(phone)
+        partner = get_partner_config(location_id)
+        ac_id = partner.get("aircall_api_id")
+        ac_tok = partner.get("aircall_api_token")
+
+        calls = search_calls_by_phone(phone, api_id=ac_id, api_token=ac_tok)
         new_calls = [c for c in calls if c.get("id") not in processed_ids]
 
         if new_calls:
-            log.info("Found %d new calls for %s", len(new_calls), contact_name)
+            log.info("Found %d new calls for %s (%s)", len(new_calls), contact_name, partner.get("name", "Default"))
             for call in new_calls:
-                call_id = process_single_call(call, contact_id, contact_name, opportunity_name, phone)
+                call_id = process_single_call(call, contact_id, contact_name, opportunity_name, phone, partner=partner)
                 if call_id:
                     processed_ids.append(call_id)
                 time.sleep(0.5)
 
-            # Update the processed list
             info["processed_call_ids"] = processed_ids
             save_monitored_contacts(contacts)
 
