@@ -287,21 +287,50 @@ def get_call_summary(call_id):
         raise
 
 
+def _merge_word_segments(segments):
+    """Merge word-level Aircall transcript segments into speaker turns.
+
+    Aircall returns individual words with participant_type (internal/external).
+    This groups consecutive words from the same speaker into full sentences.
+    """
+    if not segments:
+        return []
+
+    turns = []
+    current_speaker = None
+    current_words = []
+
+    for seg in segments:
+        # Determine speaker label
+        participant = seg.get("participant_type", "")
+        user_id = seg.get("user_id")
+        phone = seg.get("phone_number")
+        word = seg.get("text", "")
+
+        if participant == "internal":
+            speaker = f"Agent ({user_id})" if user_id else "Agent"
+        elif participant == "external":
+            speaker = f"Contact ({phone})" if phone else "Contact"
+        else:
+            speaker = seg.get("speaker", seg.get("role", "Unknown"))
+
+        if speaker != current_speaker:
+            if current_speaker is not None and current_words:
+                turns.append((current_speaker, " ".join(current_words)))
+            current_speaker = speaker
+            current_words = [word]
+        else:
+            current_words.append(word)
+
+    if current_speaker is not None and current_words:
+        turns.append((current_speaker, " ".join(current_words)))
+
+    return turns
+
+
 def format_transcript(transcript_data, call_info=None):
     """Format transcript data into readable text for a GHL note."""
     lines = []
-
-    if call_info:
-        lines.append(f"Call ID: {call_info.get('id', 'N/A')}")
-        lines.append(f"Direction: {call_info.get('direction', 'N/A')}")
-        lines.append(f"Duration: {call_info.get('duration', 0)}s")
-        started = call_info.get("started_at")
-        if started:
-            lines.append(f"Date: {datetime.fromtimestamp(started).isoformat()}")
-        user = call_info.get("user")
-        if user:
-            lines.append(f"Agent: {user.get('name', 'N/A')}")
-        lines.append("-" * 40)
 
     if not transcript_data:
         lines.append("[No transcript available]")
@@ -314,13 +343,15 @@ def format_transcript(transcript_data, call_info=None):
     )
 
     if isinstance(transcript, list):
-        for seg in transcript:
-            speaker = seg.get("speaker", seg.get("role", "Unknown"))
-            text = seg.get("text", seg.get("content", ""))
-            ts = seg.get("timestamp", seg.get("start", ""))
-            if ts:
-                lines.append(f"[{ts}] {speaker}: {text}")
-            else:
+        # Check if these are word-level segments (Aircall format)
+        if transcript and "participant_type" in transcript[0]:
+            turns = _merge_word_segments(transcript)
+            for speaker, text in turns:
+                lines.append(f"{speaker}: {text}")
+        else:
+            for seg in transcript:
+                speaker = seg.get("speaker", seg.get("role", "Unknown"))
+                text = seg.get("text", seg.get("content", ""))
                 lines.append(f"{speaker}: {text}")
     elif isinstance(transcript, dict):
         segments = (
@@ -329,10 +360,15 @@ def format_transcript(transcript_data, call_info=None):
             or transcript.get("content")
         )
         if isinstance(segments, list):
-            for seg in segments:
-                speaker = seg.get("speaker", seg.get("role", "Unknown"))
-                text = seg.get("text", seg.get("content", ""))
-                lines.append(f"{speaker}: {text}")
+            if segments and "participant_type" in segments[0]:
+                turns = _merge_word_segments(segments)
+                for speaker, text in turns:
+                    lines.append(f"{speaker}: {text}")
+            else:
+                for seg in segments:
+                    speaker = seg.get("speaker", seg.get("role", "Unknown"))
+                    text = seg.get("text", seg.get("content", ""))
+                    lines.append(f"{speaker}: {text}")
         elif "text" in transcript:
             lines.append(transcript["text"])
         else:
