@@ -638,12 +638,14 @@ def ghl_webhook():
     if not payload:
         return jsonify({"error": "No JSON payload"}), 400
 
-    log.info("Received GHL webhook: type=%s", payload.get("type"))
+    log.info("Received GHL webhook: type=%s status=%s", payload.get("type"), payload.get("status"))
 
     event_type = payload.get("type", "")
     status = payload.get("status", "")
 
-    if event_type != "OpportunityStatusUpdate" or status != "won":
+    # Only require status=won. GHL sends type=None, OpportunityStatusChanged,
+    # or OpportunityStatusUpdate depending on the trigger source.
+    if status != "won":
         log.info("Ignoring event: type=%s status=%s", event_type, status)
         return jsonify({"status": "ignored"}), 200
 
