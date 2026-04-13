@@ -57,7 +57,7 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_USER_ID = os.getenv("SLACK_USER_ID")
 
 MONITOR_DURATION_DAYS = int(os.getenv("MONITOR_DURATION_DAYS", "14"))
-POLL_TIMES = os.getenv("POLL_TIMES", "10:00,18:00").split(",")
+POLL_TIMES = os.getenv("POLL_TIMES", "06:30").split(",")  # once a day at 6:30am
 
 MONITOR_FILE = Path(os.getenv("MONITOR_FILE", "monitored_contacts.json"))
 PARTNERS_FILE = Path(os.getenv("PARTNERS_FILE", "partners.json"))
