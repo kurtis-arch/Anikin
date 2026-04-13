@@ -19,7 +19,8 @@
   },
   "wt3uRTXoU2oNPw6yZZJt": {
     "name": "Kisch Law",
-    "ghl_token": "LOCATION_API_KEY_HERE",
+    "ghl_token": "PIT_OR_LOCATION_API_KEY_HERE",
+    "ghl_api_version": "v2",
     "aircall_api_id": "AIRCALL_API_ID_HERE",
     "aircall_api_token": "AIRCALL_API_TOKEN_HERE"
   },

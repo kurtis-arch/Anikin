@@ -46,7 +46,9 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-GHL_BASE_URL = "https://rest.gohighlevel.com/v1"
+GHL_V1_BASE_URL = "https://rest.gohighlevel.com/v1"
+GHL_V2_BASE_URL = "https://services.leadconnectorhq.com"
+GHL_V2_VERSION = "2021-07-28"
 AIRCALL_BASE_URL = "https://api.aircall.io/v1"
 
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
@@ -523,18 +525,25 @@ def extract_summary_text(summary_data):
 # ---------------------------------------------------------------------------
 # GHL helpers
 # ---------------------------------------------------------------------------
-def ghl_headers(token=None):
-    return {
+def ghl_headers(token=None, api_version="v1"):
+    headers = {
         "Authorization": f"Bearer {token or GHL_API_TOKEN}",
         "Content-Type": "application/json",
     }
+    if api_version == "v2":
+        headers["Version"] = GHL_V2_VERSION
+    return headers
 
 
-def ghl_get_contact(contact_id, token=None):
+def ghl_base_url(api_version="v1"):
+    return GHL_V2_BASE_URL if api_version == "v2" else GHL_V1_BASE_URL
+
+
+def ghl_get_contact(contact_id, token=None, api_version="v1"):
     """Fetch contact details from GHL to get phone number."""
     resp = requests.get(
-        f"{GHL_BASE_URL}/contacts/{contact_id}",
-        headers=ghl_headers(token),
+        f"{ghl_base_url(api_version)}/contacts/{contact_id}",
+        headers=ghl_headers(token, api_version),
         timeout=30,
     )
     resp.raise_for_status()
@@ -542,11 +551,14 @@ def ghl_get_contact(contact_id, token=None):
     return data.get("contact", data)
 
 
-def ghl_create_note(contact_id, body, token=None):
+def ghl_create_note(contact_id, body, token=None, api_version="v1"):
     """Create a note on a GHL contact."""
+    base = ghl_base_url(api_version)
+    # V1 uses /notes/ with trailing slash, V2 uses /notes
+    notes_path = "/notes/" if api_version == "v1" else "/notes"
     resp = requests.post(
-        f"{GHL_BASE_URL}/contacts/{contact_id}/notes/",
-        headers=ghl_headers(token),
+        f"{base}/contacts/{contact_id}{notes_path}",
+        headers=ghl_headers(token, api_version),
         json={"body": body},
         timeout=30,
     )
@@ -563,6 +575,7 @@ def process_single_call(call, contact_id, contact_name, opportunity_name, phone,
     ac_id = partner.get("aircall_api_id")
     ac_tok = partner.get("aircall_api_token")
     ghl_tok = partner.get("ghl_token")
+    ghl_ver = partner.get("ghl_api_version", "v1")
 
     call_id = call.get("id")
     started = call.get("started_at", 0)
@@ -603,7 +616,7 @@ def process_single_call(call, contact_id, contact_name, opportunity_name, phone,
 
     # Post note to GHL with call date
     note_body = f"Aircall Transcript ({call_date_str}): {doc_url}"
-    ghl_create_note(contact_id, note_body, token=ghl_tok)
+    ghl_create_note(contact_id, note_body, token=ghl_tok, api_version=ghl_ver)
 
     # Slack notification
     send_slack_notification(
@@ -663,12 +676,13 @@ def process_won_opportunity(contact_id, opportunity_name, payload, partner=None)
     """Full pipeline: pull ALL transcripts for the contact, start 2-week monitoring."""
     partner = partner or get_partner_config(None)
     ghl_tok = partner.get("ghl_token")
+    ghl_ver = partner.get("ghl_api_version", "v1")
     ac_id = partner.get("aircall_api_id")
     ac_tok = partner.get("aircall_api_token")
 
     # Step 1: Get contact phone number from GHL
     log.info("Fetching GHL contact %s", contact_id)
-    contact = ghl_get_contact(contact_id, token=ghl_tok)
+    contact = ghl_get_contact(contact_id, token=ghl_tok, api_version=ghl_ver)
     phone = contact.get("phone")
     if not phone:
         log.warning("No phone number for contact %s", contact_id)
