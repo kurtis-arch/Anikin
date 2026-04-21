@@ -233,6 +233,8 @@ class NotificationOrchestrator:
 
     def _build_context(self, case: ProbateCase) -> dict[str, Any]:
         """Build the template context from case data."""
+        import os
+
         decedent = case.decedent
         petitioner = case.petitioner
 
@@ -241,6 +243,19 @@ class NotificationOrchestrator:
             f"  - {d.doc_type.value.replace('_', ' ').title()}"
             for d in pending_docs
         )
+
+        # Build the Cognito Forms intake URL from INTAKE_FORM_BASE_URL so the
+        # email points clients at the real form. The hidden CaseId field in
+        # Cognito reads the case_id query param, which is how every webhook
+        # back to us gets linked to the correct ProbateCase.
+        intake_base = os.getenv(
+            "INTAKE_FORM_BASE_URL",
+            "https://www.cognitoforms.com/YourCompany/ProbateIntake",
+        )
+        sep = "&" if "?" in intake_base else "?"
+        intake_url = f"{intake_base}{sep}case_id={case.id}"
+        if case.crm_deal_id:
+            intake_url += f"&crm={case.crm_deal_id}"
 
         return {
             "client_name": petitioner.contact.first_name if petitioner else "",
@@ -258,7 +273,7 @@ class NotificationOrchestrator:
             ),
             "hearing_location": case.court.hearing_location or "TBD",
             "filing_date": case.updated_at.strftime("%B %d, %Y"),
-            "intake_url": f"https://intake.trustate.com/form?case_id={case.id}",
+            "intake_url": intake_url,
             "upload_url": f"https://portal.trustate.com/upload?case_id={case.id}",
             "review_url": f"https://portal.trustate.com/review?case_id={case.id}",
             "document_list": doc_list,
