@@ -36,6 +36,11 @@ from trustate.filing.efiling import (
     FilingResult,
     TylerEFileProvider,
 )
+from trustate.integrations.cognito_forms import (
+    CognitoFieldMap,
+    CognitoFormsProcessor,
+    CognitoUpdate,
+)
 from trustate.integrations.mappers import MapperConfig, case_to_trustate_payload
 from trustate.integrations.trustate_client import (
     TrustateAPIError,
@@ -58,6 +63,22 @@ from trustate.workflow.store import CaseStore, JSONFileStore
 logger = logging.getLogger(__name__)
 
 
+def _summarize_update(update: "CognitoUpdate") -> str:
+    """One-line summary of what fields a Cognito webhook carried, for logs."""
+    parts = []
+    if update.client:
+        parts.append("client")
+    if update.decedent:
+        parts.append("decedent")
+    if update.assets is not None:
+        parts.append(f"assets({len(update.assets)})")
+    if update.beneficiaries is not None:
+        parts.append(f"beneficiaries({len(update.beneficiaries)})")
+    if update.documents:
+        parts.append(f"docs({len(update.documents)})")
+    return ",".join(parts) or "empty"
+
+
 class ProbatePipeline:
     """End-to-end automation pipeline for probate cases.
 
@@ -72,6 +93,7 @@ class ProbatePipeline:
         notification_sender=None,
         trustate_client: Optional[TrustateClient] = None,
         mapper_config: Optional[MapperConfig] = None,
+        cognito_field_map: Optional[CognitoFieldMap] = None,
     ):
         # Core components
         self.store = store or JSONFileStore()
@@ -95,6 +117,9 @@ class ProbatePipeline:
         # is skipped (useful for local dev without credentials).
         self.trustate = trustate_client
         self.mapper_config = mapper_config or MapperConfig()
+
+        # Cognito Forms — used to parse intake/update webhooks
+        self.cognito = CognitoFormsProcessor(field_map=cognito_field_map)
 
         # Workflow engine
         self.engine = WorkflowEngine()
@@ -208,6 +233,79 @@ class ProbatePipeline:
             case.notes.append(
                 f"Trustate sync failed ({e.status_code}): {e.message}"
             )
+
+    def handle_cognito_webhook(
+        self, payload: dict[str, Any]
+    ) -> ProbateCase:
+        """Handle any Cognito Forms webhook — first submission OR later update.
+
+        Fires on every entry save: initial submission, client coming back
+        to add info, document re-uploads, corrections, etc. Each webhook:
+          1. Is parsed into a CognitoUpdate (only non-empty fields).
+          2. Is merged into the existing ProbateCase (no destructive overwrites).
+          3. Triggers a PUT /import to Trustate with the updated data.
+          4. Advances the case stage when milestones are reached
+             (intake completion, all docs collected).
+        """
+        update = self.cognito.parse(payload)
+
+        if not update.case_id:
+            raise ValueError(
+                "Cognito webhook missing CaseId field — add a hidden field "
+                "named 'CaseId' pre-populated from the case_id URL parameter."
+            )
+
+        case = self.store.get(update.case_id)
+        if not case:
+            raise ValueError(
+                f"Case {update.case_id} not found — Cognito entry #{update.entry_number} "
+                f"references a case that doesn't exist in our system."
+            )
+
+        logger.info(
+            "Cognito webhook: case=%s entry=#%s fields_updated=%s",
+            case.id,
+            update.entry_number,
+            _summarize_update(update),
+        )
+
+        # Merge the update into the case (non-destructive)
+        case = self.cognito.merge_into_case(case, update)
+        self.store.save(case)
+
+        # Push the updated matter to Trustate
+        self._sync_to_trustate(case, create=False)
+        self.store.save(case)
+
+        # Auto-advance if we just crossed a milestone
+        case = self._maybe_advance_after_cognito(case)
+        self.store.save(case)
+
+        return case
+
+    def _maybe_advance_after_cognito(self, case: ProbateCase) -> ProbateCase:
+        """Advance the case stage based on what the Cognito update just unlocked."""
+        # Crossed from intake -> documents needed?
+        if (
+            case.stage == CaseStage.INTAKE_IN_PROGRESS
+            and case.decedent
+            and case.decedent.date_of_death
+            and case.assets
+            and case.beneficiaries
+        ):
+            case = self.engine.advance(case, CaseStage.INTAKE_COMPLETE)
+            case = self.engine.advance(case, CaseStage.DOCUMENTS_REQUESTED)
+
+        # Crossed from documents_requested -> documents_collected?
+        if case.stage == CaseStage.DOCUMENTS_REQUESTED:
+            pending = case.get_pending_documents()
+            if pending and not any(
+                d for d in case.documents if d.status.value == "requested"
+            ):
+                case = self.engine.advance(case, CaseStage.DOCUMENTS_COLLECTED)
+                case = self.engine.advance(case, CaseStage.PETITION_DRAFTING)
+
+        return case
 
     def handle_document_uploaded(
         self,

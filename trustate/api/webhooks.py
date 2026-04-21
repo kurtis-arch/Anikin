@@ -205,6 +205,43 @@ async def hearing_scheduled(payload: HearingScheduledPayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/webhooks/cognito/intake")
+async def cognito_intake_webhook(request: Request):
+    """Cognito Forms webhook — fires on every entry save (first + updates).
+
+    Configure in Cognito Forms:
+      1. Submission Settings > Webhook: POST to this URL
+      2. Enable "Send on entry updates" (not just new submissions)
+      3. Add a hidden field "CaseId" pre-populated from ?case_id= query param
+
+    Every save — whether the client is filling in more info, uploading
+    more documents, or correcting a typo — fires this webhook, which
+    merges the new data into the case and pushes the update to Trustate
+    via PUT /import.
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    try:
+        case = pipeline.handle_cognito_webhook(payload)
+        return {
+            "status": "ok",
+            "case_id": case.id,
+            "stage": case.stage.value,
+            "trustate_import_id": case.trustate_import_id,
+            "pending_documents": [
+                d.doc_type.value for d in case.get_pending_documents()
+            ],
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("Failed to process Cognito webhook")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/webhooks/court/letters-issued")
 async def letters_issued(request: Request):
     """Triggered when the court issues Letters Testamentary/Administration."""
