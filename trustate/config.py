@@ -46,6 +46,14 @@ class TrustateConfig:
     efiling_api_key: str = os.getenv("EFILING_API_KEY", "")
     efiling_firm_id: str = os.getenv("EFILING_FIRM_ID", "")
 
+    # Trustate Import API (partner platform)
+    trustate_api_host: str = os.getenv("TRUSTATE_API_HOST", "")
+    trustate_public_token: str = os.getenv("TRUSTATE_PUBLIC_TOKEN", "")
+    trustate_private_key: str = os.getenv("TRUSTATE_PRIVATE_KEY", "")
+    trustate_source_id: str = os.getenv(
+        "TRUSTATE_SOURCE_ID", "trustate-automation-pipeline"
+    )
+
     # Aircall (for call recordings integration)
     aircall_api_id: str = os.getenv("AIRCALL_API_ID", "")
     aircall_api_token: str = os.getenv("AIRCALL_API_TOKEN", "")
@@ -64,3 +72,16 @@ class TrustateConfig:
 
 
 config = TrustateConfig()
+
+
+def build_trustate_client():
+    """Construct a TrustateClient from env vars, or return None if not configured."""
+    from trustate.integrations.trustate_client import TrustateClient
+
+    if not config.trustate_api_host or not config.trustate_public_token or not config.trustate_private_key:
+        return None
+    return TrustateClient(
+        host=config.trustate_api_host,
+        public_token=config.trustate_public_token,
+        private_key=config.trustate_private_key,
+    )

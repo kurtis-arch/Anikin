@@ -15,6 +15,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
+from trustate.config import build_trustate_client
+from trustate.integrations.mappers import MapperConfig
 from trustate.pipeline import ProbatePipeline
 
 logger = logging.getLogger(__name__)
@@ -25,7 +27,12 @@ app = FastAPI(
     version="0.1.0",
 )
 
-pipeline = ProbatePipeline()
+from trustate.config import config as _config
+
+pipeline = ProbatePipeline(
+    trustate_client=build_trustate_client(),
+    mapper_config=MapperConfig(source=_config.trustate_source_id),
+)
 
 
 # ── Request Models ────────────────────────────────────────────────────

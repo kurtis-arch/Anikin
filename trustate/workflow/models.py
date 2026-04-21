@@ -238,6 +238,9 @@ class ProbateCase:
     crm_deal_id: str = ""
     aircall_call_id: str = ""
 
+    # Trustate Import API tracking
+    trustate_import_id: str = ""
+
     # Automation metadata
     stage_history: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)

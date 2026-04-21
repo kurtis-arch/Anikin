@@ -36,6 +36,11 @@ from trustate.filing.efiling import (
     FilingResult,
     TylerEFileProvider,
 )
+from trustate.integrations.mappers import MapperConfig, case_to_trustate_payload
+from trustate.integrations.trustate_client import (
+    TrustateAPIError,
+    TrustateClient,
+)
 from trustate.intake.client_intake import IntakeProcessor
 from trustate.notifications.notifier import (
     NotificationOrchestrator,
@@ -65,6 +70,8 @@ class ProbatePipeline:
         store: Optional[CaseStore] = None,
         efiling_provider: Optional[EFilingProvider] = None,
         notification_sender=None,
+        trustate_client: Optional[TrustateClient] = None,
+        mapper_config: Optional[MapperConfig] = None,
     ):
         # Core components
         self.store = store or JSONFileStore()
@@ -83,6 +90,11 @@ class ProbatePipeline:
         # Notifications
         sender = notification_sender or SendGridSender()
         self.notifications = NotificationOrchestrator(sender)
+
+        # Trustate Import API — optional. If not provided, Trustate sync
+        # is skipped (useful for local dev without credentials).
+        self.trustate = trustate_client
+        self.mapper_config = mapper_config or MapperConfig()
 
         # Workflow engine
         self.engine = WorkflowEngine()
@@ -110,9 +122,15 @@ class ProbatePipeline:
         """Handle a new client signed by a sales closer.
 
         This is the entry point — triggered by a CRM webhook when a deal
-        is closed-won.
+        is closed-won. Creates the matter in Trustate, then advances the
+        case through intake.
         """
         case = self.intake.create_case_from_crm_webhook(crm_payload)
+        self.store.save(case)
+
+        # Create the matter in Trustate right away — so partner law firms
+        # can see the new case the moment the closer wins the deal.
+        self._sync_to_trustate(case, create=True)
         self.store.save(case)
 
         # Auto-advance to intake
@@ -137,11 +155,59 @@ class ProbatePipeline:
         case = self.intake.process_intake_form(case, form_data)
         self.store.save(case)
 
+        # Enrich the Trustate matter with intake data (decedent, beneficiaries, assets).
+        self._sync_to_trustate(case, create=False)
+        self.store.save(case)
+
         # Auto-advance: intake complete -> request documents
         case = self.engine.advance(case, CaseStage.DOCUMENTS_REQUESTED)
         self.store.save(case)
 
         return case
+
+    def _sync_to_trustate(self, case: ProbateCase, *, create: bool) -> None:
+        """Push the case to Trustate via the Import API.
+
+        Silently no-ops if no Trustate client is configured (dev mode).
+        Errors are logged but do not block the pipeline — the case still
+        progresses locally and the sync can be retried later.
+        """
+        if not self.trustate:
+            logger.debug(
+                "Trustate client not configured — skipping sync for case %s",
+                case.id,
+            )
+            return
+
+        payload = case_to_trustate_payload(case, self.mapper_config)
+        try:
+            if create:
+                result = self.trustate.create_matter(payload)
+                logger.info(
+                    "Case %s: created Trustate matter importId=%s",
+                    case.id,
+                    result.get("importId"),
+                )
+            else:
+                result = self.trustate.upsert_matter(payload)
+                logger.info(
+                    "Case %s: synced to Trustate importId=%s",
+                    case.id,
+                    result.get("importId"),
+                )
+            import_id = result.get("importId")
+            if import_id:
+                case.trustate_import_id = import_id
+        except TrustateAPIError as e:
+            logger.error(
+                "Case %s: Trustate sync failed (%d): %s",
+                case.id,
+                e.status_code,
+                e.message,
+            )
+            case.notes.append(
+                f"Trustate sync failed ({e.status_code}): {e.message}"
+            )
 
     def handle_document_uploaded(
         self,
