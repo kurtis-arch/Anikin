@@ -84,11 +84,14 @@ STAGE_NOTIFICATIONS: dict[CaseStage, dict[str, str]] = {
         "client_subject": "Welcome to Trustate — Let's Get Started",
         "client_body": (
             "Hi {client_name},\n\n"
-            "Welcome! We've started your probate case for {decedent_name}. "
-            "Please complete your intake form to get things moving:\n\n"
-            "{intake_url}\n\n"
-            "This should take about 10-15 minutes. The more details you "
-            "provide now, the faster we can prepare your petition.\n\n"
+            "Welcome! We've started your probate case for {decedent_name}.\n\n"
+            "You'll receive TWO emails from us right now:\n\n"
+            "1. This email — please complete your intake form so we can "
+            "prepare your petition:\n   {intake_url}\n\n"
+            "2. A separate email from PandaDoc with your fee agreement to "
+            "review and sign.\n\n"
+            "Both need to be completed before we can move forward. The "
+            "intake form should take about 10-15 minutes.\n\n"
             "Best,\nThe Trustate Team"
         ),
     },

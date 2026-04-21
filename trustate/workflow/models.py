@@ -241,6 +241,16 @@ class ProbateCase:
     # Trustate Import API tracking
     trustate_import_id: str = ""
 
+    # PandaDoc fee agreement tracking
+    pandadoc_document_id: str = ""
+    pandadoc_status: str = ""  # e.g. document.sent, document.completed
+    fee_agreement_signed: bool = False
+    fee_agreement_signed_at: Optional[datetime] = None
+
+    # Cognito Forms intake tracking
+    cognito_entry_id: str = ""
+    intake_email_sent_at: Optional[datetime] = None
+
     # Automation metadata
     stage_history: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)

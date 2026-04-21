@@ -54,6 +54,16 @@ class TrustateConfig:
         "TRUSTATE_SOURCE_ID", "trustate-automation-pipeline"
     )
 
+    # PandaDoc (fee agreement e-signature)
+    pandadoc_api_key: str = os.getenv("PANDADOC_API_KEY", "")
+    pandadoc_fee_agreement_template_id: str = os.getenv(
+        "PANDADOC_FEE_AGREEMENT_TEMPLATE_ID", ""
+    )
+    pandadoc_webhook_secret: str = os.getenv("PANDADOC_WEBHOOK_SECRET", "")
+
+    # GHL (GoHighLevel)
+    ghl_webhook_secret: str = os.getenv("GHL_WEBHOOK_SECRET", "")
+
     # Aircall (for call recordings integration)
     aircall_api_id: str = os.getenv("AIRCALL_API_ID", "")
     aircall_api_token: str = os.getenv("AIRCALL_API_TOKEN", "")
@@ -85,3 +95,12 @@ def build_trustate_client():
         public_token=config.trustate_public_token,
         private_key=config.trustate_private_key,
     )
+
+
+def build_pandadoc_client():
+    """Construct a PandaDocClient from env vars, or return None if not configured."""
+    from trustate.integrations.pandadoc import PandaDocClient
+
+    if not config.pandadoc_api_key:
+        return None
+    return PandaDocClient(api_key=config.pandadoc_api_key)

@@ -197,14 +197,25 @@ class IntakeProcessor:
 
         return ProbateType.FORMAL
 
-    def get_intake_form_url(self, case: ProbateCase) -> str:
+    def get_intake_form_url(
+        self, case: ProbateCase, base_url: str = ""
+    ) -> str:
         """Generate the intake form URL to send to the client.
 
-        In production this would create a unique, pre-filled form link
-        (e.g., Typeform, JotForm, or your own portal).
+        Uses the Cognito Forms URL configured via INTAKE_FORM_BASE_URL env
+        var (e.g. https://www.cognitoforms.com/YourCompany/ProbateIntake).
+        The case_id is passed as a query param so Cognito's hidden CaseId
+        field auto-populates and every webhook back to us carries it.
         """
-        base_url = "https://intake.trustate.com/form"
-        return f"{base_url}?case_id={case.id}&crm={case.crm_deal_id}"
+        if not base_url:
+            import os
+
+            base_url = os.getenv(
+                "INTAKE_FORM_BASE_URL",
+                "https://www.cognitoforms.com/YourCompany/ProbateIntake",
+            )
+        sep = "&" if "?" in base_url else "?"
+        return f"{base_url}{sep}case_id={case.id}&crm={case.crm_deal_id}"
 
 
 def _parse_date(value: Any) -> Optional[date]:

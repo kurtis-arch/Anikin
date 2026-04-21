@@ -36,12 +36,21 @@ from trustate.filing.efiling import (
     FilingResult,
     TylerEFileProvider,
 )
+from datetime import datetime as _datetime
+
 from trustate.integrations.cognito_forms import (
     CognitoFieldMap,
     CognitoFormsProcessor,
     CognitoUpdate,
 )
 from trustate.integrations.mappers import MapperConfig, case_to_trustate_payload
+from trustate.integrations.pandadoc import (
+    FeeAgreementRequest,
+    PandaDocAPIError,
+    PandaDocClient,
+    PandaDocEvent,
+    Recipient,
+)
 from trustate.integrations.trustate_client import (
     TrustateAPIError,
     TrustateClient,
@@ -94,6 +103,8 @@ class ProbatePipeline:
         trustate_client: Optional[TrustateClient] = None,
         mapper_config: Optional[MapperConfig] = None,
         cognito_field_map: Optional[CognitoFieldMap] = None,
+        pandadoc_client: Optional[PandaDocClient] = None,
+        fee_agreement_template_id: str = "",
     ):
         # Core components
         self.store = store or JSONFileStore()
@@ -121,6 +132,11 @@ class ProbatePipeline:
         # Cognito Forms — used to parse intake/update webhooks
         self.cognito = CognitoFormsProcessor(field_map=cognito_field_map)
 
+        # PandaDoc — used to send fee agreement. Optional; skipped if
+        # credentials not configured.
+        self.pandadoc = pandadoc_client
+        self.fee_agreement_template_id = fee_agreement_template_id
+
         # Workflow engine
         self.engine = WorkflowEngine()
         self._register_handlers()
@@ -146,28 +162,177 @@ class ProbatePipeline:
     def handle_new_client(self, crm_payload: dict[str, Any]) -> ProbateCase:
         """Handle a new client signed by a sales closer.
 
-        This is the entry point — triggered by a CRM webhook when a deal
-        is closed-won. Creates the matter in Trustate, then advances the
-        case through intake.
+        Triggered by the GHL opportunity-won webhook. Fans out to three systems:
+          1. Trustate — create the matter + contact
+          2. Cognito Forms — email the client the intake link (handled by
+             the INTAKE_IN_PROGRESS stage notification)
+          3. PandaDoc — create + send the fee agreement for e-signature
+
+        All three fire in sequence. A failure in any one is logged but
+        does NOT abort the others — we'd rather have 2 of 3 succeed than
+        lose the whole case because one downstream service is flaky.
         """
         case = self.intake.create_case_from_crm_webhook(crm_payload)
         self.store.save(case)
 
-        # Create the matter in Trustate right away — so partner law firms
-        # can see the new case the moment the closer wins the deal.
+        # Fan-out 1: Create Trustate matter
         self._sync_to_trustate(case, create=True)
         self.store.save(case)
 
-        # Auto-advance to intake
+        # Fan-out 2: Send fee agreement via PandaDoc
+        self._send_fee_agreement(case)
+        self.store.save(case)
+
+        # Fan-out 3: Auto-advance to intake — this fires the Cognito intake
+        # email via the INTAKE_IN_PROGRESS stage notification.
         case = self.engine.advance(case, CaseStage.INTAKE_IN_PROGRESS)
+        case.intake_email_sent_at = _datetime.utcnow()
         self.store.save(case)
 
         logger.info(
-            "New client pipeline started: case=%s, client=%s",
+            "New client pipeline started: case=%s, client=%s "
+            "(trustate_id=%s, pandadoc_id=%s)",
             case.id,
             case.petitioner.contact.full_name if case.petitioner else "unknown",
+            case.trustate_import_id or "-",
+            case.pandadoc_document_id or "-",
         )
         return case
+
+    def handle_pandadoc_webhook(
+        self, events: list[dict] | dict
+    ) -> list[ProbateCase]:
+        """Handle PandaDoc webhook events (signature, viewed, completed, etc.).
+
+        PandaDoc POSTs an array of events. We look them up by document_id
+        (stored as case.pandadoc_document_id when we sent the agreement) and
+        update the corresponding case. Primary purpose: mark fee_agreement_signed
+        when status becomes document.completed.
+        """
+        from trustate.integrations.pandadoc import parse_webhook_event
+
+        if isinstance(events, dict):
+            events = [events]
+
+        updated: list[ProbateCase] = []
+        for raw in events:
+            try:
+                event = parse_webhook_event(raw)
+            except ValueError as e:
+                logger.warning("Skipping unparseable PandaDoc event: %s", e)
+                continue
+
+            case = self._find_case_by_pandadoc_id(event.document_id)
+            if not case:
+                logger.warning(
+                    "PandaDoc event %s for unknown document_id=%s",
+                    event.event,
+                    event.document_id,
+                )
+                continue
+
+            case.pandadoc_status = event.status
+            if event.status == "document.completed":
+                case.fee_agreement_signed = True
+                case.fee_agreement_signed_at = _datetime.utcnow()
+                logger.info("Case %s: fee agreement signed", case.id)
+
+            # Push the status update to Trustate (DataFields keeps a record)
+            self._sync_to_trustate(case, create=False)
+            self.store.save(case)
+            updated.append(case)
+
+        return updated
+
+    def _find_case_by_pandadoc_id(
+        self, document_id: str
+    ) -> Optional[ProbateCase]:
+        """Look up a case by the PandaDoc document id we stored on it."""
+        if not document_id:
+            return None
+        for case in self.store.list_all():
+            if case.pandadoc_document_id == document_id:
+                return case
+        return None
+
+    def _send_fee_agreement(self, case: ProbateCase) -> None:
+        """Create + send the fee agreement via PandaDoc.
+
+        No-ops if PandaDoc isn't configured (dev mode). Failures are logged
+        and noted on the case; they don't abort the rest of the pipeline.
+        """
+        if not self.pandadoc or not self.fee_agreement_template_id:
+            logger.debug(
+                "PandaDoc not configured — skipping fee agreement for case %s",
+                case.id,
+            )
+            return
+        if not case.petitioner or not case.petitioner.contact.email:
+            logger.warning(
+                "Case %s has no client email — cannot send fee agreement",
+                case.id,
+            )
+            return
+
+        contact = case.petitioner.contact
+        decedent_name = case.decedent.full_name if case.decedent else ""
+
+        req = FeeAgreementRequest(
+            template_id=self.fee_agreement_template_id,
+            recipient=Recipient(
+                email=contact.email,
+                first_name=contact.first_name,
+                last_name=contact.last_name,
+                role="Client",
+            ),
+            fields={
+                "Client.FullName": contact.full_name,
+                "Client.Email": contact.email,
+                "Client.Phone": contact.phone,
+                "Client.Address": contact.full_address,
+                "Decedent.FullName": decedent_name,
+                "Case.ExternalId": case.crm_deal_id or case.id,
+            },
+            tokens={
+                "Client.FirstName": contact.first_name,
+                "Client.LastName": contact.last_name,
+                "Decedent.FullName": decedent_name,
+            },
+            metadata={
+                "case_id": case.id,
+                "crm_deal_id": case.crm_deal_id,
+                "law_firm_id": case.law_firm_id,
+            },
+            document_name=(
+                f"Fee Agreement - {contact.full_name}"
+                + (f" ({decedent_name} Estate)" if decedent_name else "")
+            ),
+            email_subject=(
+                f"Fee Agreement for {decedent_name}'s Estate"
+                if decedent_name
+                else "Your Fee Agreement"
+            ),
+        )
+
+        try:
+            result = self.pandadoc.send_fee_agreement(req)
+            case.pandadoc_document_id = result.document_id
+            case.pandadoc_status = result.status
+            logger.info(
+                "Case %s: fee agreement sent via PandaDoc (doc_id=%s)",
+                case.id,
+                result.document_id,
+            )
+        except PandaDocAPIError as e:
+            logger.error(
+                "Case %s: PandaDoc send failed (%d): %s",
+                case.id,
+                e.status_code,
+                e.message,
+            )
+            case.notes.append(
+                f"PandaDoc fee agreement send failed ({e.status_code}): {e.message}"
+            )
 
     def handle_intake_submitted(
         self, case_id: str, form_data: dict[str, Any]

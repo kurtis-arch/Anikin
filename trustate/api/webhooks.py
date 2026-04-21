@@ -15,7 +15,12 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-from trustate.config import build_trustate_client
+from trustate.config import build_pandadoc_client, build_trustate_client
+from trustate.integrations.ghl import (
+    event_to_crm_payload,
+    is_won_status,
+    parse_ghl_webhook,
+)
 from trustate.integrations.mappers import MapperConfig
 from trustate.pipeline import ProbatePipeline
 
@@ -32,6 +37,8 @@ from trustate.config import config as _config
 pipeline = ProbatePipeline(
     trustate_client=build_trustate_client(),
     mapper_config=MapperConfig(source=_config.trustate_source_id),
+    pandadoc_client=build_pandadoc_client(),
+    fee_agreement_template_id=_config.pandadoc_fee_agreement_template_id,
 )
 
 
@@ -202,6 +209,82 @@ async def hearing_scheduled(payload: HearingScheduledPayload):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception("Failed to process hearing notification")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/webhooks/ghl/opportunity-won")
+async def ghl_opportunity_won(request: Request):
+    """GoHighLevel webhook — fires when an opportunity is marked won.
+
+    Configure this in GHL:
+      Automation > Workflow > trigger: Opportunity Status Changed = Won
+      Action: Webhook > POST to this URL > include opportunity + contact data
+
+    On receipt, this endpoint fans out:
+      1. Trustate: create matter + contact
+      2. Cognito Forms: email client the intake link (includes case_id)
+      3. PandaDoc: send fee agreement for e-signature
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    if not is_won_status(payload):
+        return {"status": "ignored", "reason": "not a won status"}
+
+    try:
+        event = parse_ghl_webhook(payload)
+        if not event.email:
+            raise HTTPException(
+                status_code=400,
+                detail="GHL webhook missing contact email — cannot proceed",
+            )
+        case = pipeline.handle_new_client(event_to_crm_payload(event))
+        return {
+            "status": "ok",
+            "case_id": case.id,
+            "stage": case.stage.value,
+            "trustate_import_id": case.trustate_import_id,
+            "pandadoc_document_id": case.pandadoc_document_id,
+            "intake_email_sent_at": (
+                case.intake_email_sent_at.isoformat()
+                if case.intake_email_sent_at
+                else None
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to process GHL opportunity-won webhook")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/webhooks/pandadoc/events")
+async def pandadoc_events(request: Request):
+    """PandaDoc webhook — fires on every document event (viewed, signed, etc.).
+
+    Configure in PandaDoc: Settings > Integrations > Webhooks
+      URL: POST to this endpoint
+      Subscribe to: document_state_changed (at minimum)
+
+    The signature event (status=document.completed) sets
+    case.fee_agreement_signed=True and is pushed to Trustate as DataFields.
+    """
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    try:
+        updated = pipeline.handle_pandadoc_webhook(body)
+        return {
+            "status": "ok",
+            "updated_cases": [c.id for c in updated],
+            "signed": [c.id for c in updated if c.fee_agreement_signed],
+        }
+    except Exception as e:
+        logger.exception("Failed to process PandaDoc webhook")
         raise HTTPException(status_code=500, detail=str(e))
 
 
