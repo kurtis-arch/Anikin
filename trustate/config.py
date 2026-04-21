@@ -1,0 +1,106 @@
+"""Configuration for the Trustate automation pipeline.
+
+All secrets and environment-specific settings are loaded from
+environment variables (via .env file in development).
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+@dataclass
+class TrustateConfig:
+    """Central configuration — reads from environment variables."""
+
+    # API Server
+    api_host: str = os.getenv("TRUSTATE_API_HOST", "0.0.0.0")
+    api_port: int = int(os.getenv("TRUSTATE_API_PORT", "8000"))
+
+    # Data storage
+    data_dir: str = os.getenv("TRUSTATE_DATA_DIR", "data/cases")
+
+    # CRM Integration (GoHighLevel, HubSpot, etc.)
+    crm_api_key: str = os.getenv("CRM_API_KEY", "")
+    crm_webhook_secret: str = os.getenv("CRM_WEBHOOK_SECRET", "")
+
+    # Email (SendGrid)
+    sendgrid_api_key: str = os.getenv("SENDGRID_API_KEY", "")
+    notification_from_email: str = os.getenv(
+        "NOTIFICATION_FROM_EMAIL", "noreply@trustate.com"
+    )
+
+    # SMS (Twilio)
+    twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+    twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+    twilio_from_number: str = os.getenv("TWILIO_FROM_NUMBER", "")
+
+    # Court E-Filing (Tyler Technologies)
+    efiling_api_url: str = os.getenv("EFILING_API_URL", "")
+    efiling_api_key: str = os.getenv("EFILING_API_KEY", "")
+    efiling_firm_id: str = os.getenv("EFILING_FIRM_ID", "")
+
+    # Trustate Import API (partner platform)
+    trustate_api_host: str = os.getenv("TRUSTATE_API_HOST", "")
+    trustate_public_token: str = os.getenv("TRUSTATE_PUBLIC_TOKEN", "")
+    trustate_private_key: str = os.getenv("TRUSTATE_PRIVATE_KEY", "")
+    trustate_source_id: str = os.getenv(
+        "TRUSTATE_SOURCE_ID", "trustate-automation-pipeline"
+    )
+
+    # PandaDoc (fee agreement e-signature)
+    pandadoc_api_key: str = os.getenv("PANDADOC_API_KEY", "")
+    pandadoc_fee_agreement_template_id: str = os.getenv(
+        "PANDADOC_FEE_AGREEMENT_TEMPLATE_ID", ""
+    )
+    pandadoc_webhook_secret: str = os.getenv("PANDADOC_WEBHOOK_SECRET", "")
+
+    # GHL (GoHighLevel)
+    ghl_webhook_secret: str = os.getenv("GHL_WEBHOOK_SECRET", "")
+
+    # Aircall (for call recordings integration)
+    aircall_api_id: str = os.getenv("AIRCALL_API_ID", "")
+    aircall_api_token: str = os.getenv("AIRCALL_API_TOKEN", "")
+
+    # Notion (for internal tracking)
+    notion_api_key: str = os.getenv("NOTION_API_KEY", "")
+    notion_database_id: str = os.getenv("NOTION_DATABASE_ID", "")
+
+    # Client Portal
+    portal_base_url: str = os.getenv(
+        "PORTAL_BASE_URL", "https://portal.trustate.com"
+    )
+    intake_form_base_url: str = os.getenv(
+        "INTAKE_FORM_BASE_URL", "https://intake.trustate.com/form"
+    )
+
+
+config = TrustateConfig()
+
+
+def build_trustate_client():
+    """Construct a TrustateClient from env vars, or return None if not configured."""
+    from trustate.integrations.trustate_client import TrustateClient
+
+    if not config.trustate_api_host or not config.trustate_public_token or not config.trustate_private_key:
+        return None
+    return TrustateClient(
+        host=config.trustate_api_host,
+        public_token=config.trustate_public_token,
+        private_key=config.trustate_private_key,
+    )
+
+
+def build_pandadoc_client():
+    """Construct a PandaDocClient from env vars, or return None if not configured."""
+    from trustate.integrations.pandadoc import PandaDocClient
+
+    if not config.pandadoc_api_key:
+        return None
+    return PandaDocClient(api_key=config.pandadoc_api_key)
